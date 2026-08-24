@@ -24,6 +24,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONFIG_RELOAD_DELAY,
     CONF_GLANCES_PASSWORD,
     CONF_GLANCES_PORT,
     CONF_GLANCES_USER,
@@ -44,6 +45,7 @@ from .const import (
     GLANCES_PLUGINS,
     MANUFACTURER,
     RIG_POWER_SUDO,
+    RX_SCRATCHPAD_BYTES,
 )
 from .hass_agent import HassAgentPower
 from .hass_agent import async_probe as async_probe_hass_agent
@@ -77,6 +79,23 @@ def miner_os(data: dict) -> str | None:
     if not match:
         return None
     return match.group(1).split(";")[0].strip() or None
+
+
+def hint_for_threads(threads: int, logical: int) -> int:
+    """The `max-threads-hint` percentage that yields `threads` mining threads.
+
+    XMRig computes round(logical * hint / 100), so this is that inverted. The
+    rounding is why 3 threads out of 8 can be asked for as either 37% or 38% --
+    both land on 3 -- and the clamp is because the ends are not free: 0% is
+    refused by XMRig, and 100% is already its maximum.
+
+    Exact on a CPU with a single L3, which is most of them. On a part with
+    several top-level caches (Threadripper, Epyc, multi-CCX Ryzen) XMRig splits
+    the budget per cache and drops the remainder, so the count that comes back
+    can be lower than the one asked for. Nothing breaks: the entity reports what
+    the miner actually runs, so the number simply lands short and can be nudged.
+    """
+    return max(1, min(100, round(threads * 100 / logical)))
 
 
 def miner_memory_total(data: dict) -> int | None:
@@ -205,7 +224,11 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         measurement is lost at exactly the moment it is needed.
         """
         miner = await self._async_fetch_miner()
-        return {"miner": miner, "glances": await self._async_fetch_glances()}
+        return {
+            "miner": miner,
+            "cpu_backend": await self._async_fetch_cpu_backend(),
+            "glances": await self._async_fetch_glances(),
+        }
 
     async def _async_fetch_miner(self) -> dict:
         try:
@@ -221,6 +244,37 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             raise UpdateFailed("timed out polling XMRig") from err
         except aiohttp.ClientError as err:
             raise UpdateFailed(f"connection error talking to XMRig: {err}") from err
+
+    async def _async_fetch_cpu_backend(self) -> dict | None:
+        """The CPU backend, as /2/backends describes it, or None.
+
+        Fetched for one number the summary cannot give honestly: its
+        `hashrate.threads` is the concatenation of *every* enabled backend, so
+        on a rig that also mines on a GPU it would count GPU threads as CPU
+        ones -- and the thread control would show, and try to set, a number that
+        means nothing.
+
+        Like Glances, this can never fail a poll. It is a plain GET, so it works
+        even against a restricted API, but a miner that does not serve it must
+        not take the hashrate down with it: `mining_threads` falls back to the
+        summary.
+        """
+        try:
+            async with asyncio.timeout(10):
+                async with self.session.get(
+                    f"{self.base_url}/2/backends", headers=self._headers
+                ) as resp:
+                    resp.raise_for_status()
+                    backends = await resp.json(content_type=None)
+        except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError, ValueError):
+            return None
+
+        if not isinstance(backends, list):
+            return None
+        return next(
+            (b for b in backends if isinstance(b, dict) and b.get("type") == "cpu"),
+            None,
+        )
 
     async def _async_fetch_glances(self) -> dict | None:
         """Return {plugin: payload}, or None if Glances does not answer."""
@@ -410,40 +464,11 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             return await resp.json(content_type=None)
 
     async def async_send_command(self, method: str) -> None:
-        """Send pause/resume/stop through the json_rpc API, then refresh state.
-
-        A raw HTTP/1.0 client rather than aiohttp: XMRig's server sometimes
-        returns a duplicated response ("Data after Connection: close") which
-        aiohttp's strict parser rejects even though the command was applied.
-        Here the response is read until close and only the 200 status plus an
-        "OK" body are checked, the way curl would.
-        """
+        """Send pause/resume/stop through the json_rpc API, then refresh state."""
         body = json.dumps({"method": method, "id": 1})
-        request = (
-            f"POST /json_rpc HTTP/1.0\r\n"
-            f"Host: {self.host}:{self.port}\r\n"
-            f"Authorization: Bearer {self._token}\r\n"
-            f"Content-Type: application/json\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            f"Connection: close\r\n"
-            f"\r\n"
-            f"{body}"
-        ).encode()
-
-        try:
-            async with asyncio.timeout(10):
-                reader, writer = await asyncio.open_connection(self.host, self.port)
-                try:
-                    writer.write(request)
-                    await writer.drain()
-                    raw = await reader.read()
-                finally:
-                    writer.close()
-                    await writer.wait_closed()
-        except (OSError, TimeoutError, asyncio.TimeoutError) as err:
-            raise HomeAssistantError(
-                f"XMRig unreachable for command {method}: {err}"
-            ) from err
+        raw = await self._async_raw_http(
+            "POST", "/json_rpc", body, what=f"command {method}"
+        )
 
         status_line = raw.split(b"\r\n", 1)[0]
         if b" 200 " not in status_line and not status_line.rstrip().endswith(b"200 OK"):
@@ -456,6 +481,206 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             )
 
         await self.async_request_refresh()
+
+    async def _async_raw_http(
+        self, method: str, path: str, body: str, *, what: str
+    ) -> bytes:
+        """One HTTP/1.0 request to the miner, written by hand.
+
+        A raw client rather than aiohttp, for the writing side only: XMRig's
+        server sometimes returns a duplicated response ("Data after Connection:
+        close") which aiohttp's strict parser rejects even though the request
+        was applied -- a command that worked reported as a failure. Here the
+        response is read until close and judged the way curl would, on its
+        status line.
+        """
+        payload = body.encode()
+        request = (
+            f"{method} {path} HTTP/1.0\r\n"
+            f"Host: {self.host}:{self.port}\r\n"
+            f"Authorization: Bearer {self._token}\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(payload)}\r\n"
+            f"Connection: close\r\n"
+            f"\r\n"
+        ).encode() + payload
+
+        try:
+            async with asyncio.timeout(10):
+                reader, writer = await asyncio.open_connection(self.host, self.port)
+                try:
+                    writer.write(request)
+                    await writer.drain()
+                    return await reader.read()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+        except (OSError, TimeoutError, asyncio.TimeoutError) as err:
+            raise HomeAssistantError(
+                f"XMRig unreachable for {what}: {err}"
+            ) from err
+
+    # --- Mining thread count --------------------------------------------------
+
+    @property
+    def cpu(self) -> dict:
+        """The summary's CPU block: brand, cores, threads, L3 size."""
+        return self.miner.get("cpu") or {}
+
+    @property
+    def cpu_backend(self) -> dict:
+        """The CPU backend of the last poll: its algorithm and its threads."""
+        return (self.data or {}).get("cpu_backend") or {}
+
+    @property
+    def mining_threads(self) -> int | None:
+        """How many CPU mining threads are running.
+
+        Taken from the CPU backend rather than from the summary's thread list,
+        which counts every backend at once (see _async_fetch_cpu_backend); the
+        summary is only the fallback, and is right whenever nothing but the CPU
+        mines, which is the normal case.
+
+        Either list stays populated while the miner is paused -- the threads
+        exist, they are simply not hashing -- so a pause does not make the count
+        collapse and move the control on its own.
+        """
+        threads = self.cpu_backend.get("threads")
+        if threads is None:
+            threads = (self.miner.get("hashrate") or {}).get("threads")
+        if not threads:
+            # Empty rather than absent: XMRig serves an empty list in the
+            # windows where the backend holds no hashrate object yet -- just
+            # after a start, and after the `stop` method. Zero is not a value
+            # this control can carry, its minimum being one, so report it as
+            # unknown instead of publishing a state below the entity's own
+            # minimum.
+            return None
+        return len(threads)
+
+    @property
+    def max_mining_threads(self) -> int | None:
+        """The most mining threads XMRig will actually start on this machine.
+
+        min(logical CPUs, L3 / 2 MiB). Asking for more is not refused, it is
+        silently ignored -- so without this ceiling the top half of the control
+        would do nothing on any machine whose cache, not its core count, is what
+        limits it. That is the common case: 8 threads and 8 MiB of L3 gives 4.
+        """
+        logical = self.cpu.get("threads")
+        if not logical:
+            return None
+        ceiling = int(logical)
+        l3 = self.cpu.get("l3")
+        if l3:
+            ceiling = max(1, min(ceiling, int(l3) // RX_SCRATCHPAD_BYTES))
+        # Never below what the miner is already running. The 2 MiB divisor is
+        # RandomX's scratchpad, but XMRig's ceiling is per algorithm: a rig on
+        # cn-lite (1 MiB) or argon2 (512 KiB) fits more threads than this works
+        # out. Rather than carry a table of every algorithm's scratchpad, take
+        # the running count as proof that many do fit -- otherwise the control
+        # would cap below the value it is itself displaying, and the count the
+        # miner started with could not be put back.
+        return max(ceiling, self.mining_threads or 0)
+
+    async def async_set_mining_threads(self, threads: int) -> None:
+        """Ask the miner for `threads` mining threads, through its own hint.
+
+        The whole configuration is read, edited and written back, because a
+        whole configuration is the only thing the API accepts. Two details make
+        that safe to do from a slider:
+
+        - Every list-valued key under `cpu` is dropped. Those are the resolved
+          per-algorithm thread lists (`rx`, `cn`, `argon2`, ...) that XMRig
+          returns in place of the hint, and they take precedence over it:
+          leaving them in would write a hint that changes nothing. Dropping them
+          hands the decision back to auto-config, which is what works out
+          affinity and intensity for the new count -- values worth keeping, as
+          they are not contiguous on most machines.
+        - Nothing else is touched. Pools, wallet and access token are sent back
+          exactly as they arrived, so a rig cannot lose its pool to a slider.
+        """
+        logical = self.cpu.get("threads")
+        if not logical:
+            raise HomeAssistantError(
+                f"{self.host} has not reported its CPU thread count yet"
+            )
+
+        config = await self._async_fetch_config()
+        cpu = config.get("cpu")
+        if not isinstance(cpu, dict):
+            raise HomeAssistantError(
+                f"{self.host} returned a configuration with no cpu section"
+            )
+        dropped = [k for k, value in cpu.items() if isinstance(value, list)]
+        for key in dropped:
+            del cpu[key]
+        cpu["max-threads-hint"] = hint_for_threads(threads, int(logical))
+        # Debug rather than a warning: on a miner configured with a hint these
+        # keys are auto-config's own output and dropping them is the whole
+        # mechanism, so warning would fire on every single change. It is worth
+        # recording, because on a hand-tuned miner these same keys are the
+        # operator's own thread lists, and this is where they stop existing.
+        _LOGGER.debug(
+            "Thread profiles handed back to auto-config on %s: %s",
+            self.host,
+            ", ".join(dropped) or "none",
+        )
+
+        raw = await self._async_raw_http(
+            "PUT", "/2/config", json.dumps(config), what="the thread count"
+        )
+        status_line = raw.split(b"\r\n", 1)[0]
+        if b" 403" in status_line:
+            raise HomeAssistantError(
+                f"{self.host} serves a restricted API: set \"restricted\": false"
+                " in the miner's http section for the thread count to be"
+                " changeable"
+            )
+        if not (b" 200" in status_line or b" 204" in status_line):
+            raise HomeAssistantError(
+                "XMRig refused the new thread count: "
+                f"{status_line.decode(errors='replace')}"
+            )
+
+        # XMRig saves the file and lets its own watcher reload it, so the new
+        # count is not readable the instant the PUT returns.
+        await asyncio.sleep(CONFIG_RELOAD_DELAY)
+        await self.async_request_refresh()
+
+    async def _async_fetch_config(self) -> dict:
+        """The miner's running configuration.
+
+        Needs `restricted: false` in the miner's `http` section. A restricted
+        API keeps serving /1/summary perfectly happily and answers 403 here,
+        which is why that case is named rather than reported as a failure to
+        connect.
+        """
+        try:
+            async with asyncio.timeout(10):
+                async with self.session.get(
+                    f"{self.base_url}/2/config", headers=self._headers
+                ) as resp:
+                    if resp.status == 403:
+                        raise HomeAssistantError(
+                            f"{self.host} serves a restricted API: set"
+                            ' "restricted": false in the miner\'s http section'
+                            " for the thread count to be changeable"
+                        )
+                    if resp.status == 401:
+                        raise HomeAssistantError(
+                            f"{self.host} refused the access token"
+                        )
+                    resp.raise_for_status()
+                    return await resp.json(content_type=None)
+        except (TimeoutError, asyncio.TimeoutError) as err:
+            raise HomeAssistantError(
+                f"timed out reading {self.host}'s configuration"
+            ) from err
+        except aiohttp.ClientError as err:
+            raise HomeAssistantError(
+                f"could not read {self.host}'s configuration: {err}"
+            ) from err
 
     @property
     def device_info(self) -> DeviceInfo:
