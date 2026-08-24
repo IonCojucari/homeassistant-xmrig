@@ -128,3 +128,34 @@ CAPS_COMMAND = "command"
 # under `entity.sensor.state.state`.
 STATE_MINING = "mining"
 STATE_PAUSED = "paused"
+
+# --- Mining thread count ------------------------------------------------------
+#
+# XMRig has no "use N threads" setting. What it has is `cpu.max-threads-hint`, a
+# percentage of the machine's *logical* CPUs, which its auto-config turns into a
+# thread list -- and the API hands back that resolved list, not the hint. So the
+# hint is what gets written and the thread count is what gets read; neither can
+# be read back as the other.
+#
+# Measured against XMRig 6.24.0 on an 8-thread CPU with 8 MiB of L3:
+#
+#   hint  13%  ->  1 thread      hint  50%  ->  4 threads
+#   hint  26%  ->  2 threads     hint  63%  ->  4 threads
+#   hint  37%  ->  3 threads     hint 100%  ->  4 threads
+#
+# i.e. threads = round(logical * hint / 100), never below 1, then capped by the
+# cache ceiling below -- which is why every value from 50% up gives 4 here, and
+# why a percentage makes a poor thing to put in front of someone.
+
+# RandomX gives each mining thread a 2 MiB scratchpad and wants it to stay in
+# L3, so XMRig's auto-config never starts more rx threads than the cache holds,
+# however many cores the machine has.
+RX_SCRATCHPAD_BYTES = 2 * 1024 * 1024
+
+# How long to wait after writing the config before reading the thread count back.
+#
+# A config PUT is not applied in place: XMRig saves the file and its own watcher
+# reloads it a moment later (measured at ~0.5 s, the restart of the CPU backend
+# itself taking 3 ms). Refreshing any sooner reads the count from before the
+# change and makes the entity snap back to its old value for one poll.
+CONFIG_RELOAD_DELAY = 2.0

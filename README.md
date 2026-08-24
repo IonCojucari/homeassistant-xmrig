@@ -14,6 +14,7 @@ One device per miner, each with:
 | Entity | Notes |
 |---|---|
 | `switch` | ON = mining, OFF = paused. Uses the API's `pause`/`resume` methods, so the process stays alive and the RandomX dataset stays allocated — resuming is instant. |
+| `number.mining_threads` | How many CPU threads the miner may use, 1 to what this machine can actually run. Applied live — see below. |
 | `sensor.hashrate` | H/s, 10-second window |
 | `sensor.hashrate_max` | H/s, peak since start |
 | `sensor.shares_good` | accepted shares |
@@ -46,6 +47,51 @@ Plus host power buttons, when the machine supports them.
 
 The switch pauses the *miner*, which is not the same as powering the machine —
 that is what the buttons below are for.
+
+## Mining threads
+
+`number.mining_threads` changes how much of the CPU the miner takes, while it
+runs. The pool connection and the RandomX dataset survive the change: the CPU
+backend restarts in about 3 ms, so there is no re-initialisation to pay and no
+share lost.
+
+It is a **thread count**, not a percentage, although XMRig's own setting is a
+percentage. `cpu.max-threads-hint` is a percentage of the machine's *logical*
+CPUs, which auto-config then caps at what the L3 cache can hold — 2 MiB per
+RandomX thread. On an 8-thread CPU with 8 MiB of L3 that ceiling is 4 threads,
+so 50%, 75% and 100% all mean the same thing and the top half of a percentage
+slider would do nothing. The integration therefore offers 1 to
+`min(logical CPUs, L3 / 2 MiB)` and converts:
+
+```
+hint = round(threads × 100 / logical CPUs)
+```
+
+XMRig still decides everything a thread count implies — which cores to pin to,
+at what intensity. The resolved thread lists are dropped from the config before
+it is written back precisely so that auto-config gets to make that decision
+again; on most machines the affinities it picks are not contiguous, and writing
+an explicit list would throw that away.
+
+**How long it lasts depends on your miner, not on Home Assistant.** XMRig
+applies a config change by saving it over the file it was started from and
+letting its own watcher reload it. So the new count lasts exactly as long as
+that file does:
+
+| Miner | Outcome |
+|---|---|
+| [NixOS rig](https://github.com/IonCojucari/nixos-xmrig-flake) | resets at the next miner start — `xmrig-start` rebuilds the config from the declared `maxThreadsHint` |
+| [HAOS add-on](https://github.com/IonCojucari/haos-xmrig) | resets at the next start — `run.sh` rebuilds the config from the add-on options |
+| Plain XMRig started from your own `config.json` | persists — that file has been rewritten |
+
+That rewrite is a full save, so on a hand-tuned miner it also replaces any
+explicit per-algorithm thread lists (`"rx": [0, 2, 4, 6]` and the like) with
+auto-config's own, and drops comments the way any save does. Worth a backup of
+`config.json` before driving the count from Home Assistant.
+
+Requires `"restricted": false` in the miner's `http` section, which is also what
+the pause switch needs. A restricted API keeps serving the sensors and answers
+403 to this; the error says so.
 
 ## Host power control (optional)
 

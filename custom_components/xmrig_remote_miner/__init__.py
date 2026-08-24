@@ -14,7 +14,12 @@ from homeassistant.core import HomeAssistant, callback
 
 from .coordinator import XmrigCoordinator
 
-PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
+PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
+    Platform.NUMBER,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 type XmrigConfigEntry = ConfigEntry[XmrigCoordinator]
 
