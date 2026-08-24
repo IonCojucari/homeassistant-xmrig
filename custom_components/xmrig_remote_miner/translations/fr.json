@@ -108,11 +108,6 @@
       "wake": {
         "name": "Démarrer"
       }
-    },
-    "number": {
-      "mining_threads": {
-        "name": "Threads de minage"
-      }
     }
   }
 }

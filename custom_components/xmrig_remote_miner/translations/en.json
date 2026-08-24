@@ -108,11 +108,6 @@
       "wake": {
         "name": "Wake"
       }
-    },
-    "number": {
-      "mining_threads": {
-        "name": "Mining threads"
-      }
     }
   }
 }
