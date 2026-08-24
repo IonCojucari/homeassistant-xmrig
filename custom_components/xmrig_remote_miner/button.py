@@ -42,6 +42,10 @@ async def _press_reboot(coordinator: XmrigCoordinator) -> None:
     await coordinator.async_power_command("reboot")
 
 
+async def _press_suspend(coordinator: XmrigCoordinator) -> None:
+    await coordinator.async_power_command("suspend")
+
+
 async def _press_wake(coordinator: XmrigCoordinator) -> None:
     caps = coordinator.power_capabilities
     if caps is None or caps.mac is None:
@@ -64,6 +68,24 @@ REBOOT = XmrigButtonDescription(
     icon="mdi:restart",
     entity_category=EntityCategory.CONFIG,
     press_fn=_press_reboot,
+)
+
+# Suspend rather than shut down, for a rig that is stopped and restarted through
+# the day. The machine wakes on the same magic packet as the Wake button below,
+# and comes back with the RandomX dataset and the hugepage pool still allocated
+# -- which is the difference between resuming in seconds and paying a full boot
+# plus a dataset init every time the sun goes behind a cloud.
+#
+# It only appears when `rig-power status` names it, i.e. when the rig's own
+# config has declared that this board's firmware was actually tested: a board
+# that sleeps and does not wake is not recoverable remotely, and the Wake button
+# would be pressing against nothing.
+SUSPEND = XmrigButtonDescription(
+    key="suspend",
+    translation_key="suspend",
+    icon="mdi:sleep",
+    entity_category=EntityCategory.CONFIG,
+    press_fn=_press_suspend,
 )
 
 WAKE = XmrigButtonDescription(
@@ -90,6 +112,8 @@ async def async_setup_entry(
         descriptions.append(SHUTDOWN)
     if caps.can_reboot:
         descriptions.append(REBOOT)
+    if caps.can_suspend:
+        descriptions.append(SUSPEND)
     if caps.can_wake:
         descriptions.append(WAKE)
 

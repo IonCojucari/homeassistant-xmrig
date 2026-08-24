@@ -38,9 +38,11 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from .const import (
     ACTION_OFF,
     ACTION_REBOOT,
+    ACTION_SUSPEND,
     HASS_AGENT_IDENTIFIER_PREFIX,
     HASS_AGENT_REBOOT_KEYS,
     HASS_AGENT_SHUTDOWN_KEYS,
+    HASS_AGENT_SUSPEND_KEYS,
     MQTT_DOMAIN,
 )
 from .ssh import PowerCapabilities
@@ -148,6 +150,8 @@ def _find_commands(
             found.setdefault(ACTION_OFF, (entry.domain, entry.entity_id))
         elif any(key in haystack for key in HASS_AGENT_REBOOT_KEYS):
             found.setdefault(ACTION_REBOOT, (entry.domain, entry.entity_id))
+        elif any(key in haystack for key in HASS_AGENT_SUSPEND_KEYS):
+            found.setdefault(ACTION_SUSPEND, (entry.domain, entry.entity_id))
 
     return found
 

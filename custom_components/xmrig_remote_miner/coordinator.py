@@ -354,7 +354,7 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         )
 
     async def async_power_command(self, action: str) -> None:
-        """Power the machine off or reboot it, through whichever source declared it.
+        """Power the machine off, reboot it or suspend it, through whichever source declared it.
 
         With HASS.Agent there is nothing to catch: the command goes out over
         MQTT and the broker acknowledges it long before the machine starts
@@ -365,6 +365,14 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         instead of returning cleanly. That error *is* the expected success, so
         it is not propagated -- otherwise Home Assistant would show a failure
         every time the action worked perfectly.
+
+        Suspend is the same shape with a different flavour. `systemctl suspend`
+        asks logind and returns before anything happens, so the command usually
+        exits 0 and only then does the machine stop -- but if it stops first,
+        the session does not close, it *freezes*: it is the machine that went
+        away, not the socket, so there is no FIN and the timeout is what ends
+        the wait. Both outcomes land in the same except clause below, which is
+        why suspend needs no special case here.
         """
         caps = self.power_capabilities
 

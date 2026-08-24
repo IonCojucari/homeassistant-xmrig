@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from .const import (
     ACTION_OFF,
     ACTION_REBOOT,
+    ACTION_SUSPEND,
     CAPS_ACTIONS,
     CAPS_COMMAND,
     CAPS_MAC,
@@ -87,12 +88,21 @@ class PowerCapabilities:
         return ACTION_REBOOT in self.actions
 
     @property
+    def can_suspend(self) -> bool:
+        return ACTION_SUSPEND in self.actions
+
+    @property
     def can_wake(self) -> bool:
         return self.mac is not None
 
     @property
     def any(self) -> bool:
-        return self.can_power_off or self.can_reboot or self.can_wake
+        return (
+            self.can_power_off
+            or self.can_reboot
+            or self.can_suspend
+            or self.can_wake
+        )
 
     def as_dict(self) -> dict:
         """Serialisable form, for storing in the config entry."""
@@ -129,7 +139,9 @@ class PowerCapabilities:
 
         caps = cls(
             actions=frozenset(
-                a for a in actions if a in (ACTION_OFF, ACTION_REBOOT)
+                a
+                for a in actions
+                if a in (ACTION_OFF, ACTION_REBOOT, ACTION_SUSPEND)
             ),
             mac=mac if isinstance(mac, str) and _MAC_RE.match(mac) else None,
             command=command,
@@ -238,7 +250,9 @@ class SshRunner:
                 break
 
         caps = PowerCapabilities(
-            actions=frozenset(actions & {ACTION_OFF, ACTION_REBOOT}),
+            actions=frozenset(
+                actions & {ACTION_OFF, ACTION_REBOOT, ACTION_SUSPEND}
+            ),
             mac=mac,
             command=command,
         )
