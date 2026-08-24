@@ -1,0 +1,28 @@
+name: Validate
+
+# hassfest is Home Assistant's own manifest/translation linter: it catches a
+# malformed manifest, a translation key that no entity declares, and an
+# integration laid out somewhere HA will not find it. All three are failures
+# that otherwise only show up as a silent no-op after a restart.
+on:
+  push:
+  pull_request:
+  schedule:
+    # Weekly, because these checks track Home Assistant's rules, not this
+    # repository: they can start failing without a commit here.
+    - cron: "0 4 * * 1"
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration

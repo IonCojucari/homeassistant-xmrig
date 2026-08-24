@@ -1,0 +1,113 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ajouter un rig XMRig",
+        "description": "Renseignez l'adresse et le jeton d'accès HTTP de l'instance XMRig (option http.access-token du mineur). Si Glances tourne sur la même machine, ses relevés de température et de charge sont ajoutés automatiquement.",
+        "data": {
+          "name": "Nom",
+          "host": "Adresse IP ou hôte",
+          "port": "Port de l'API",
+          "token": "Jeton d'accès",
+          "scan_interval": "Intervalle de relevé (secondes)",
+          "glances_port": "Port Glances (0 pour désactiver)",
+          "ssh_user": "Utilisateur SSH (vide = pas de contrôle machine)",
+          "ssh_port": "Port SSH",
+          "ssh_key": "Clé privée SSH",
+          "hass_agent_device": "Appareil HASS.Agent (vide = détection automatique)",
+          "glances_user": "Utilisateur Glances (vide si non protégé)",
+          "glances_password": "Mot de passe Glances"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigurer le rig",
+        "description": "Modifiez l'adresse, les identifiants ou l'intervalle de relevé de ce rig. L'entrée est conservée, donc les entités et leur historique aussi — contrairement à une suppression suivie d'un nouvel ajout.",
+        "data": {
+          "host": "Adresse IP ou hôte",
+          "port": "Port de l'API",
+          "token": "Jeton d'accès",
+          "scan_interval": "Intervalle de relevé (secondes)",
+          "glances_port": "Port Glances (0 pour désactiver)",
+          "ssh_user": "Utilisateur SSH (vide = pas de contrôle machine)",
+          "ssh_port": "Port SSH",
+          "ssh_key": "Clé privée SSH",
+          "hass_agent_device": "Appareil HASS.Agent (vide = détection automatique)",
+          "glances_user": "Utilisateur Glances (vide si non protégé)",
+          "glances_password": "Mot de passe Glances"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connexion impossible à cette adresse.",
+      "invalid_auth": "Jeton d'accès refusé."
+    },
+    "abort": {
+      "already_configured": "Ce rig est déjà configuré.",
+      "reconfigure_successful": "Rig reconfiguré."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "État",
+        "state": {
+          "mining": "En minage",
+          "paused": "En pause"
+        }
+      },
+      "hashrate": {
+        "name": "Hashrate"
+      },
+      "hashrate_khs": {
+        "name": "Hashrate (kH/s)"
+      },
+      "hashrate_max": {
+        "name": "Hashrate max"
+      },
+      "shares_good": {
+        "name": "Parts acceptées"
+      },
+      "shares_rejected": {
+        "name": "Parts rejetées"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "pool": {
+        "name": "Pool"
+      },
+      "ping": {
+        "name": "Ping pool"
+      },
+      "cpu_temperature": {
+        "name": "Température CPU"
+      },
+      "cpu_usage": {
+        "name": "Utilisation CPU"
+      },
+      "memory_usage": {
+        "name": "Mémoire utilisée"
+      },
+      "load": {
+        "name": "Charge système"
+      },
+      "os": {
+        "name": "Système"
+      },
+      "memory_total": {
+        "name": "RAM totale"
+      }
+    },
+    "button": {
+      "shutdown": {
+        "name": "Éteindre"
+      },
+      "reboot": {
+        "name": "Redémarrer"
+      },
+      "wake": {
+        "name": "Démarrer"
+      }
+    }
+  }
+}

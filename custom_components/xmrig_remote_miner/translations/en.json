@@ -1,0 +1,113 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add an XMRig rig",
+        "description": "Enter the address and HTTP access token of the XMRig instance (the miner's http.access-token option). If Glances is running on the same machine, its temperature and load readings are added automatically.",
+        "data": {
+          "name": "Name",
+          "host": "IP address or host",
+          "port": "API port",
+          "token": "Access token",
+          "scan_interval": "Poll interval (seconds)",
+          "glances_port": "Glances port (0 to disable)",
+          "ssh_user": "SSH user (blank to disable host control)",
+          "ssh_port": "SSH port",
+          "ssh_key": "SSH private key",
+          "hass_agent_device": "HASS.Agent device (blank = auto-detect)",
+          "glances_user": "Glances username (blank if unprotected)",
+          "glances_password": "Glances password"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure rig",
+        "description": "Change this rig's address, credentials or poll interval. The entry is kept, so the entities and their history survive — unlike removing and re-adding it.",
+        "data": {
+          "host": "IP address or host",
+          "port": "API port",
+          "token": "Access token",
+          "scan_interval": "Poll interval (seconds)",
+          "glances_port": "Glances port (0 to disable)",
+          "ssh_user": "SSH user (blank to disable host control)",
+          "ssh_port": "SSH port",
+          "ssh_key": "SSH private key",
+          "hass_agent_device": "HASS.Agent device (blank = auto-detect)",
+          "glances_user": "Glances username (blank if unprotected)",
+          "glances_password": "Glances password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to that address.",
+      "invalid_auth": "Access token rejected."
+    },
+    "abort": {
+      "already_configured": "This rig is already configured.",
+      "reconfigure_successful": "Rig reconfigured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "State",
+        "state": {
+          "mining": "Mining",
+          "paused": "Paused"
+        }
+      },
+      "hashrate": {
+        "name": "Hashrate"
+      },
+      "hashrate_khs": {
+        "name": "Hashrate (kH/s)"
+      },
+      "hashrate_max": {
+        "name": "Max hashrate"
+      },
+      "shares_good": {
+        "name": "Accepted shares"
+      },
+      "shares_rejected": {
+        "name": "Rejected shares"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "pool": {
+        "name": "Pool"
+      },
+      "ping": {
+        "name": "Pool ping"
+      },
+      "cpu_temperature": {
+        "name": "CPU temperature"
+      },
+      "cpu_usage": {
+        "name": "CPU usage"
+      },
+      "memory_usage": {
+        "name": "Memory used"
+      },
+      "load": {
+        "name": "System load"
+      },
+      "os": {
+        "name": "Operating system"
+      },
+      "memory_total": {
+        "name": "Total RAM"
+      }
+    },
+    "button": {
+      "shutdown": {
+        "name": "Shut down"
+      },
+      "reboot": {
+        "name": "Reboot"
+      },
+      "wake": {
+        "name": "Wake"
+      }
+    }
+  }
+}

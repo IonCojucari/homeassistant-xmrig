@@ -1,0 +1,6 @@
+# Python bytecode, written into the integration directory by Home Assistant
+# itself at runtime. Two interpreter versions' worth were present on the live
+# box (cpython-312 and cpython-314), which is what these look like after an
+# HA core upgrade.
+__pycache__/
+*.py[cod]
