@@ -55,9 +55,31 @@ Three more entities appear when the host turns out to support them:
 |---|---|
 | `button.shutdown` | `rig-power off` over SSH, or a HASS.Agent command |
 | `button.reboot` | `rig-power reboot` over SSH, or a HASS.Agent command |
+| `button.suspend` | `rig-power suspend` over SSH, or HASS.Agent's *Sleep* |
 | `button.wake` | Wake-on-LAN magic packet |
 
 Detected the same way Glances is, at setup, from two sources tried in order.
+
+### Suspend, and why it is a separate verb
+
+Suspend to RAM wakes on the same magic packet as a shut-down machine, so it
+adds no new way to lose a rig. What it changes is the cost of coming back:
+
+| | Saves | Costs to resume |
+|---|---|---|
+| Pause (the switch) | part of the draw — the machine stays awake | instant; pool connection and RandomX dataset both kept |
+| **Suspend** | nearly all of it | seconds; RAM is refreshed, so the dataset and the hugepage pool survive |
+| Shut down | all of it | a full boot plus a fresh dataset init |
+
+That matters for a rig switched on and off through the day — following solar
+surplus, say — where a poweroff spends a minute of every cycle rebuilding
+something that was already in memory.
+
+The button only appears when `rig-power status` names `suspend`, which on the
+[NixOS flake](https://github.com/IonCojucari/nixos-xmrig-flake) means
+`rig.power.allowSuspend` is on. Leave it off for a board you have not tested:
+S3 is firmware, and a board that sleeps but does not resume is a walk to the
+machine — the wake button would be pressing against nothing.
 
 **1. SSH and `rig-power`.** One session, and the machine is asked what it
 accepts:

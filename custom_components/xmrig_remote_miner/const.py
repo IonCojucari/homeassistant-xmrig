@@ -98,10 +98,32 @@ MQTT_DOMAIN = "mqtt"
 # hass_agent.py accepts both and calls the matching service.
 HASS_AGENT_SHUTDOWN_KEYS = ("shutdown",)
 HASS_AGENT_REBOOT_KEYS = ("restart", "reboot")
+# HASS.Agent calls suspend-to-RAM "Sleep". Hibernate is deliberately not in
+# here: it is S4, which writes RAM to disk and loses the warm dataset that is
+# the entire reason for offering suspend at all -- so it would cost as much as
+# a poweroff while looking like it costs nothing.
+HASS_AGENT_SUSPEND_KEYS = ("sleep",)
 
 # Actions rig-power can announce.
 ACTION_OFF = "off"
 ACTION_REBOOT = "reboot"
+
+# Suspend to RAM. Worth a verb of its own rather than being folded into "off"
+# because what it costs is completely different, and that difference is the
+# whole reason it exists.
+#
+# A poweroff loses the RandomX dataset and the hugepage pool, so coming back
+# means a full boot plus a dataset init -- tens of seconds, more without 1 GB
+# pages. S3 keeps RAM refreshed, so both survive and the machine resumes in a
+# few seconds with the miner already warm. For a rig that is stopped and started
+# several times a day to follow solar surplus, that is the difference between a
+# sensible thing to do and a permanent tax on doing it.
+#
+# It wakes through the same magic packet as an off machine, so it adds no new
+# way to lose a rig. What it does add is a per-board firmware risk: a board that
+# sleeps but does not resume is a walk to the machine. rig-power only announces
+# the verb when `rig.power.allowSuspend` says the board has been tested.
+ACTION_SUSPEND = "suspend"
 
 WOL_PORT = 9
 

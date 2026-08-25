@@ -105,6 +105,9 @@
       "reboot": {
         "name": "Redémarrer"
       },
+      "suspend": {
+        "name": "Mettre en veille"
+      },
       "wake": {
         "name": "Démarrer"
       }

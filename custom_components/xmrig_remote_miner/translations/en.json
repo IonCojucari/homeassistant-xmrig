@@ -105,6 +105,9 @@
       "reboot": {
         "name": "Reboot"
       },
+      "suspend": {
+        "name": "Suspend"
+      },
       "wake": {
         "name": "Wake"
       }
