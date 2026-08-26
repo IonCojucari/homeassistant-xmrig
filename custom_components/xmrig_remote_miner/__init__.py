@@ -12,11 +12,44 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 
+from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS
 from .coordinator import XmrigCoordinator
 
 PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
 
 type XmrigConfigEntry = ConfigEntry[XmrigCoordinator]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Drop what host power control no longer needs, from entries written before it changed.
+
+    Version 1 entries carry SSH credentials, a key path and a `command` inside
+    the remembered capabilities, none of which mean anything now that the
+    machine executes its own power actions. Nothing here would break if they
+    stayed -- they are simply never read -- but a stale SSH key path sitting in
+    a config entry is the kind of thing someone finds in two years and believes.
+    So they go, explicitly and once, rather than lingering.
+
+    The device field is renamed rather than dropped: it still points at the same
+    MQTT device, it just no longer belongs only to HASS.Agent.
+    """
+    if entry.version > 1:
+        return True
+
+    data = {
+        k: v
+        for k, v in entry.data.items()
+        if k not in ("ssh_user", "ssh_port", "ssh_key")
+    }
+    if (device := data.pop("hass_agent_device", None)) is not None:
+        data[CONF_MQTT_DEVICE] = device
+    if isinstance(caps := data.get(CONF_POWER_CAPS), dict):
+        data[CONF_POWER_CAPS] = {
+            k: v for k, v in caps.items() if k in (CAPS_ACTIONS, CAPS_MAC)
+        }
+
+    hass.config_entries.async_update_entry(entry, data=data, version=2)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> bool:
@@ -46,8 +79,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> boo
             # Does not raise: only sets last_update_success.
             await coordinator.async_refresh()
 
-        # Probing needs a machine that is switched on, so it only makes sense
-        # when the miner has just answered. The result is stored in the config
+        # Probing looks for the machine's MQTT device, so it only makes sense
+        # once the miner has answered and named itself. The result is stored in the config
         # entry, which is what makes the degraded start-up above possible next
         # time. Never raises: a machine that exposes nothing simply yields a rig
         # with no buttons.

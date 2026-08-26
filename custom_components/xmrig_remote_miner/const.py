@@ -38,73 +38,43 @@ GLANCES_PLUGINS = ("sensors", "cpu", "mem", "load")
 
 # --- Host machine power control (optional) ------------------------------------
 #
-# Detected when the entry is added, like Glances: open an SSH session, ask
-# `rig-power status` what it accepts, and create only the matching buttons. A
-# host without rig-power gets none.
-CONF_SSH_USER = "ssh_user"
-CONF_SSH_PORT = "ssh_port"
-CONF_SSH_KEY = "ssh_key"
-
-DEFAULT_SSH_USER = "ha"
-DEFAULT_SSH_PORT = 22
-DEFAULT_SSH_KEY = "/config/.ssh/id_ed25519"
-
-# The `status` verb was added to rig-power for this: asking what is permitted
-# without having to attempt it. Powering a machine off to discover whether you
-# were allowed to is not an acceptable probe.
-RIG_POWER_PROBE = "sudo -n rig-power status"
-
-# Fallback without sudo, for machines exposing `rig-power` directly -- typically
-# Windows, which has neither sudo nor an equivalent. The sudo form is always
-# tried first: it is what every existing rig uses, and it must stay the nominal
-# path.
-RIG_POWER_PROBE_PLAIN = "rig-power status"
-
-# Matching prefixes for running the action once the probe has passed.
-RIG_POWER_SUDO = "sudo -n rig-power"
-RIG_POWER_PLAIN = "rig-power"
-
-# Reads the MAC of the interface holding the default route, for Wake-on-LAN.
-# Saves one more config field, and above all avoids picking the wrong card on
-# machines that have several.
-MAC_PROBE = (
-    "ip -o link show "
-    "\"$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p')\" "
-    "2>/dev/null | sed -n 's|.*link/ether \\([0-9a-f:]*\\).*|\\1|p'"
-)
-
-# The MAC getmac returns when ARP resolution failed without raising.
-MAC_UNRESOLVED = "00:00:00:00:00:00"
-
-# --- Power control via HASS.Agent (Windows machines) --------------------------
-#
-# When the SSH probe finds nothing, the machine may already expose its shutdown
-# through HASS.Agent, which publishes its commands over MQTT. Nothing is
-# reimplemented here: its device is looked up in the registry and its own
-# entities are pressed.
-#
-# HASS.Agent registers with Identifiers = "hass.agent-<name>" (see
-# CreateDeviceConfigModel), and XMRig publishes `worker_id` in /2/summary, which
-# defaults to the machine name on Windows as on Linux. The two therefore line up
-# without asking the user anything -- with the field below for the cases where
-# they have drifted apart.
-CONF_HASS_AGENT_DEVICE = "hass_agent_device"
-
-HASS_AGENT_IDENTIFIER_PREFIX = "hass.agent-"
+# One mechanism, and only one: find the machine's MQTT device and press the
+# entities it publishes for itself. A Windows host gets those from HASS.Agent, a
+# NixOS rig from the agent in the companion flake. Home Assistant never reaches
+# into the machine to run anything; it presses a button the machine offered.
 MQTT_DOMAIN = "mqtt"
 
-# HASS.Agent's built-in commands are named like this. They surface as `button`
-# entities in current versions and as `switch` entities in older ones;
-# hass_agent.py accepts both and calls the matching service.
-HASS_AGENT_SHUTDOWN_KEYS = ("shutdown",)
-HASS_AGENT_REBOOT_KEYS = ("restart", "reboot")
-# HASS.Agent calls suspend-to-RAM "Sleep". Hibernate is deliberately not in
+# The identifier families accepted, in the order they are tried. HASS.Agent
+# registers as "hass.agent-<name>" (CreateDeviceConfigModel) and the rig agent
+# as "rig-<worker>"; XMRig publishes that same `worker_id` in its summary, and
+# it is the machine name in both cases, so the two sides line up without asking
+# the user anything.
+DEVICE_IDENTIFIER_PREFIXES = ("hass.agent-", "rig-")
+
+# For the cases where the two names have drifted apart, or where several devices
+# could plausibly match: an explicit device wins over the automatic lookup.
+CONF_MQTT_DEVICE = "mqtt_device"
+
+# The command vocabulary. It is HASS.Agent's -- its built-in commands are named
+# Shutdown, Restart and Sleep -- and the rig agent publishes exactly those words
+# deliberately, so that one table serves both operating systems. The entities
+# surface as `button`s in current HASS.Agent and as `switch`es in older
+# versions; mqtt_power.py accepts both and calls the matching service.
+POWER_SHUTDOWN_KEYS = ("shutdown",)
+POWER_REBOOT_KEYS = ("restart", "reboot")
+# Suspend-to-RAM is called "Sleep" on the wire. Hibernate is deliberately not in
 # here: it is S4, which writes RAM to disk and loses the warm dataset that is
 # the entire reason for offering suspend at all -- so it would cost as much as
 # a poweroff while looking like it costs nothing.
-HASS_AGENT_SUSPEND_KEYS = ("sleep",)
+POWER_SUSPEND_KEYS = ("sleep",)
 
-# Actions rig-power can announce.
+# Waking is the one action that cannot travel over MQTT: a machine that is off
+# runs no client. The MAC normally comes from the MQTT device's `connections`,
+# which the rig agent fills in during discovery. HASS.Agent does not fill it in,
+# hence this optional field for Windows hosts.
+CONF_MAC = "mac"
+
+# Actions a machine can announce.
 ACTION_OFF = "off"
 ACTION_REBOOT = "reboot"
 
@@ -121,8 +91,8 @@ ACTION_REBOOT = "reboot"
 #
 # It wakes through the same magic packet as an off machine, so it adds no new
 # way to lose a rig. What it does add is a per-board firmware risk: a board that
-# sleeps but does not resume is a walk to the machine. rig-power only announces
-# the verb when `rig.power.allowSuspend` says the board has been tested.
+# sleeps but does not resume is a walk to the machine. The rig only publishes
+# the Sleep button when its own config says the board has been tested.
 ACTION_SUSPEND = "suspend"
 
 WOL_PORT = 9
@@ -130,10 +100,11 @@ WOL_PORT = 9
 # --- Remembered power capabilities --------------------------------------------
 #
 # The power probe only runs when the entry starts up, and it needs a machine
-# that is switched on in order to answer. Yet the button that matters most is
-# wake, whose entire purpose lies *while the machine is off*: if the probe
-# result lived only in memory, a Home Assistant restart while a rig was off
-# would produce an entry with no buttons at all -- exactly when one is needed.
+# whose MQTT device is already known to Home Assistant. Yet the button that
+# matters most is wake, whose entire purpose lies *while the machine is off*: if
+# the probe result lived only in memory, a Home Assistant restart while a rig
+# was off would produce an entry with no buttons at all -- exactly when one is
+# needed.
 #
 # The result is therefore stored in the config entry, which survives restarts,
 # and the buttons are built from that. The probe now only discovers and
@@ -141,7 +112,6 @@ WOL_PORT = 9
 CONF_POWER_CAPS = "power_caps"
 CAPS_ACTIONS = "actions"
 CAPS_MAC = "mac"
-CAPS_COMMAND = "command"
 
 # --- States of the `state` sensor ---------------------------------------------
 #

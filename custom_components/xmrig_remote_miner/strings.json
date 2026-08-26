@@ -11,10 +11,8 @@
           "token": "Access token",
           "scan_interval": "Poll interval (seconds)",
           "glances_port": "Glances port (0 to disable)",
-          "ssh_user": "SSH user (blank to disable host control)",
-          "ssh_port": "SSH port",
-          "ssh_key": "SSH private key",
-          "hass_agent_device": "HASS.Agent device (blank = auto-detect)",
+          "mac": "MAC address (blank = read from the MQTT device)",
+          "mqtt_device": "MQTT device (blank = auto-detect)",
           "glances_user": "Glances username (blank if unprotected)",
           "glances_password": "Glances password"
         }
@@ -28,10 +26,8 @@
           "token": "Access token",
           "scan_interval": "Poll interval (seconds)",
           "glances_port": "Glances port (0 to disable)",
-          "ssh_user": "SSH user (blank to disable host control)",
-          "ssh_port": "SSH port",
-          "ssh_key": "SSH private key",
-          "hass_agent_device": "HASS.Agent device (blank = auto-detect)",
+          "mac": "MAC address (blank = read from the MQTT device)",
+          "mqtt_device": "MQTT device (blank = auto-detect)",
           "glances_user": "Glances username (blank if unprotected)",
           "glances_password": "Glances password"
         }
