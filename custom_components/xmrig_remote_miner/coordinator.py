@@ -29,7 +29,6 @@ from .const import (
     CONF_MAC,
     CONF_MQTT_DEVICE,
     CONF_WORKER_ID,
-    MACHINE_READY,
     CONF_POWER_CAPS,
     DEFAULT_GLANCES_PORT,
     DEFAULT_PORT,
@@ -43,7 +42,6 @@ from .const import (
 from .mqtt_power import (
     MqttPower,
     PowerCapabilities,
-    async_machine_raw,
     async_machine_state,
     async_probe,
     async_state_entity,
@@ -194,15 +192,6 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         """
         return async_machine_state(self.hass, self.worker_id, *self._lookup)
 
-    @property
-    def machine_ready(self) -> bool | None:
-        """Whether the machine says it has finished starting. None if it does not say.
-
-        Authoritative where it exists: the agent watches the miner from the same
-        box, every few seconds, and does not depend on this poll succeeding.
-        """
-        raw = async_machine_raw(self.hass, self.worker_id, *self._lookup)
-        return None if raw is None else raw == MACHINE_READY
 
     @property
     def machine_entity(self) -> str | None:
