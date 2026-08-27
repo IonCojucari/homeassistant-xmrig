@@ -177,9 +177,12 @@ class MqttPower:
 
 
 def _find_device(
-    hass: HomeAssistant, worker_id: str | None, device_id: str | None
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None,
+    mac: str | None = None,
 ) -> dr.DeviceEntry | None:
-    """Find the machine's MQTT device, by explicit choice or by worker_id."""
+    """Find the machine's MQTT device: explicit choice, then worker name, then MAC."""
     registry = dr.async_get(hass)
 
     if device_id:
@@ -188,15 +191,27 @@ def _find_device(
             _LOGGER.debug("MQTT device %s not found", device_id)
         return device
 
-    if not worker_id:
-        return None
+    if worker_id:
+        for prefix in DEVICE_IDENTIFIER_PREFIXES:
+            device = registry.async_get_device(
+                identifiers={(MQTT_DOMAIN, f"{prefix}{worker_id}")}
+            )
+            if device is not None:
+                return device
 
-    for prefix in DEVICE_IDENTIFIER_PREFIXES:
-        device = registry.async_get_device(
-            identifiers={(MQTT_DOMAIN, f"{prefix}{worker_id}")}
+    # The MAC, last, and it is not a nicety: the worker name arrives in the
+    # XMRig summary, so a machine that has been off since before this
+    # integration was updated has never had one to remember -- and that is
+    # exactly the machine whose device is worth finding, because "off" is the
+    # answer wanted from it. The MAC has been in the config entry all along.
+    #
+    # It also survives what the name does not: reinstalling a rig gives it a
+    # new machine-id and therefore a new worker name, while the network card
+    # stays put.
+    if (mac := _clean_mac(mac)) is not None:
+        return registry.async_get_device(
+            connections={(CONNECTION_NETWORK_MAC, mac)}
         )
-        if device is not None:
-            return device
     return None
 
 
@@ -280,7 +295,7 @@ def async_probe(
     from the card holding its default route, which a hand-typed field cannot do
     and a remembered value cannot notice has changed.
     """
-    device = _find_device(hass, worker_id, device_id)
+    device = _find_device(hass, worker_id, device_id, fallback_mac)
     entities = _find_commands(hass, device.id) if device is not None else {}
     mac = _device_mac(device) or _clean_mac(fallback_mac)
 
@@ -299,7 +314,10 @@ def async_probe(
 
 @callback
 def async_machine_state(
-    hass: HomeAssistant, worker_id: str | None, device_id: str | None = None
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None = None,
+    mac: str | None = None,
 ) -> str | None:
     """What the machine last said about itself, translated. None if it said nothing.
 
@@ -313,7 +331,7 @@ def async_machine_state(
     working machine with something wrong between here and its API -- and
     reporting that as a state would paper over exactly the fault worth seeing.
     """
-    device = _find_device(hass, worker_id, device_id)
+    device = _find_device(hass, worker_id, device_id, mac)
     if device is None:
         return None
 

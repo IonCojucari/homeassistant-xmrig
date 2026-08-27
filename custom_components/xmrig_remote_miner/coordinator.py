@@ -183,8 +183,19 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
 
     @property
     def machine_state(self) -> str | None:
-        """What the machine says about itself when XMRig has stopped answering."""
-        return async_machine_state(self.hass, self.worker_id, self.mqtt_device)
+        """What the machine says about itself when XMRig has stopped answering.
+
+        The remembered MAC is passed as a last way in, because this is read
+        precisely when the machine is off -- and a machine that was already off
+        when this integration was updated never got to teach it its name.
+        """
+        caps = self.power_capabilities
+        return async_machine_state(
+            self.hass,
+            self.worker_id,
+            self.mqtt_device,
+            self._configured_mac or (caps.mac if caps else None),
+        )
 
     @property
     def glances(self) -> dict | None:
