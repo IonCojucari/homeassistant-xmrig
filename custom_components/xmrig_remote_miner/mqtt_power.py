@@ -30,6 +30,7 @@ from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 
 from .const import (
     ACTION_OFF,
+    MACHINE_STATES,
     ACTION_REBOOT,
     ACTION_SUSPEND,
     CAPS_ACTIONS,
@@ -176,9 +177,12 @@ class MqttPower:
 
 
 def _find_device(
-    hass: HomeAssistant, worker_id: str | None, device_id: str | None
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None,
+    mac: str | None = None,
 ) -> dr.DeviceEntry | None:
-    """Find the machine's MQTT device, by explicit choice or by worker_id."""
+    """Find the machine's MQTT device: explicit choice, then worker name, then MAC."""
     registry = dr.async_get(hass)
 
     if device_id:
@@ -187,15 +191,27 @@ def _find_device(
             _LOGGER.debug("MQTT device %s not found", device_id)
         return device
 
-    if not worker_id:
-        return None
+    if worker_id:
+        for prefix in DEVICE_IDENTIFIER_PREFIXES:
+            device = registry.async_get_device(
+                identifiers={(MQTT_DOMAIN, f"{prefix}{worker_id}")}
+            )
+            if device is not None:
+                return device
 
-    for prefix in DEVICE_IDENTIFIER_PREFIXES:
-        device = registry.async_get_device(
-            identifiers={(MQTT_DOMAIN, f"{prefix}{worker_id}")}
+    # The MAC, last, and it is not a nicety: the worker name arrives in the
+    # XMRig summary, so a machine that has been off since before this
+    # integration was updated has never had one to remember -- and that is
+    # exactly the machine whose device is worth finding, because "off" is the
+    # answer wanted from it. The MAC has been in the config entry all along.
+    #
+    # It also survives what the name does not: reinstalling a rig gives it a
+    # new machine-id and therefore a new worker name, while the network card
+    # stays put.
+    if (mac := _clean_mac(mac)) is not None:
+        return registry.async_get_device(
+            connections={(CONNECTION_NETWORK_MAC, mac)}
         )
-        if device is not None:
-            return device
     return None
 
 
@@ -279,7 +295,7 @@ def async_probe(
     from the card holding its default route, which a hand-typed field cannot do
     and a remembered value cannot notice has changed.
     """
-    device = _find_device(hass, worker_id, device_id)
+    device = _find_device(hass, worker_id, device_id, fallback_mac)
     entities = _find_commands(hass, device.id) if device is not None else {}
     mac = _device_mac(device) or _clean_mac(fallback_mac)
 
@@ -294,6 +310,52 @@ def async_probe(
 
     _LOGGER.debug("MQTT power for %s: %s mac=%s", worker_id, entities, mac)
     return power
+
+
+@callback
+def async_state_entity(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None = None,
+    mac: str | None = None,
+) -> str | None:
+    """The entity_id of the state entity the machine publishes, if it has one."""
+    device = _find_device(hass, worker_id, device_id, mac)
+    if device is None:
+        return None
+    registry = er.async_get(hass)
+    for entry in er.async_entries_for_device(registry, device.id):
+        if entry.domain == "sensor" and "state" in (
+            f"{entry.unique_id or ''} {entry.entity_id}".lower()
+        ):
+            return entry.entity_id
+    return None
+
+
+@callback
+def async_machine_state(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None = None,
+    mac: str | None = None,
+) -> str | None:
+    """What the machine last said about itself, translated. None if it said nothing.
+
+    Read from the state entity the machine publishes, rather than by
+    subscribing here: Home Assistant's MQTT integration already holds that
+    topic, and a second subscriber to the same retained message would be a
+    second thing to keep in step with it.
+
+    Only the states that mean "gone" are translated. A machine reporting
+    `ready` while XMRig refuses to answer is not an off machine, it is a
+    working machine with something wrong between here and its API -- and
+    reporting that as a state would paper over exactly the fault worth seeing.
+    """
+    entity_id = async_state_entity(hass, worker_id, device_id, mac)
+    if entity_id is None:
+        return None
+    state = hass.states.get(entity_id)
+    return MACHINE_STATES.get(state.state) if state else None
 
 
 def send_magic_packet(mac: str, broadcast: str = "255.255.255.255") -> None:

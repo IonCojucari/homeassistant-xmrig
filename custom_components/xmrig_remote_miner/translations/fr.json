@@ -48,7 +48,9 @@
         "name": "État",
         "state": {
           "mining": "En minage",
-          "paused": "En pause"
+          "paused": "En pause",
+          "off": "Éteint",
+          "lost": "Injoignable"
         }
       },
       "hashrate": {

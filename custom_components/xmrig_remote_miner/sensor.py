@@ -19,12 +19,13 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import XmrigConfigEntry
-from .const import STATE_MINING, STATE_PAUSED
+from .const import STATE_LOST, STATE_MINING, STATE_OFF, STATE_PAUSED
 from .coordinator import XmrigCoordinator, miner_memory_total, miner_os
 
 
@@ -173,7 +174,7 @@ SENSORS: tuple[XmrigSensorDescription, ...] = (
         translation_key="state",
         icon="mdi:pickaxe",
         device_class=SensorDeviceClass.ENUM,
-        options=[STATE_MINING, STATE_PAUSED],
+        options=[STATE_MINING, STATE_PAUSED, STATE_OFF, STATE_LOST],
         value_fn=_state,
     ),
     XmrigSensorDescription(
@@ -337,10 +338,47 @@ class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
         self._attr_device_info = coordinator.device_info
 
+    async def async_added_to_hass(self) -> None:
+        """Follow the machine's own state entity, for the state sensor only.
+
+        The coordinator is not enough here. It reports the miner, and the miner
+        is exactly what is not answering when this matters; a poll that fails
+        the same way twice tells the entity nothing new, so nothing rewrites it.
+
+        Meanwhile the machine's word arrives over MQTT as a retained message,
+        restored whenever the MQTT integration gets round to it -- which can be
+        after this entry has finished setting up. Without this, a Home Assistant
+        restarted overnight would show a rig that has been off for hours as
+        `unavailable` until the rig came back and proved it, which is the one
+        case this sensor was extended for.
+        """
+        await super().async_added_to_hass()
+        if self.entity_description.key != "state":
+            return
+        if (entity_id := self.coordinator.machine_entity) is None:
+            return
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [entity_id], self._machine_said_something
+            )
+        )
+
+    @callback
+    def _machine_said_something(self, event) -> None:
+        self.async_write_ha_state()
+
     @property
     def available(self) -> bool:
         if not super().available:
-            return False
+            # One exception, and it is the whole point of reading MQTT: when
+            # the miner stops answering because the machine is off, this sensor
+            # is the one entity that still has something true to say. Going
+            # unavailable here is what used to make "switched off as asked" and
+            # "fell over" look identical -- both simply stopped reporting.
+            return (
+                self.entity_description.key == "state"
+                and self.coordinator.machine_state is not None
+            )
         if self.entity_description.source == "glances":
             # Glances can go down without the miner flinching: those sensors go
             # unavailable, the rest keep updating.
@@ -349,6 +387,15 @@ class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
 
     @property
     def native_value(self) -> str | int | float | None:
+        # The machine's own word wins whenever XMRig is not answering, and only
+        # then: a running miner is the better authority on whether it is paused.
+        # Guarded on the key as well as on the poll, because every other sensor
+        # here reports a number and would be handed a word.
+        if (
+            self.entity_description.key == "state"
+            and not self.coordinator.last_update_success
+        ):
+            return self.coordinator.machine_state
         if self.entity_description.source == "glances":
             data = self.coordinator.glances
             return None if data is None else self.entity_description.value_fn(data)

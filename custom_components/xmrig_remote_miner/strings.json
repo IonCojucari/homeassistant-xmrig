@@ -48,7 +48,9 @@
         "name": "State",
         "state": {
           "mining": "Mining",
-          "paused": "Paused"
+          "paused": "Paused",
+          "off": "Off",
+          "lost": "Lost"
         }
       },
       "hashrate": {

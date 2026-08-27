@@ -28,6 +28,7 @@ from .const import (
     CONF_GLANCES_USER,
     CONF_MAC,
     CONF_MQTT_DEVICE,
+    CONF_WORKER_ID,
     CONF_POWER_CAPS,
     DEFAULT_GLANCES_PORT,
     DEFAULT_PORT,
@@ -38,7 +39,13 @@ from .const import (
     GLANCES_PLUGINS,
     MANUFACTURER,
 )
-from .mqtt_power import MqttPower, PowerCapabilities, async_probe
+from .mqtt_power import (
+    MqttPower,
+    PowerCapabilities,
+    async_machine_state,
+    async_probe,
+    async_state_entity,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -166,8 +173,38 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
 
     @property
     def worker_id(self) -> str | None:
-        """The name the miner gives itself. Used to find its MQTT device."""
-        return self.miner.get("worker_id") or None
+        """The name the miner gives itself. Used to find its MQTT device.
+
+        Falls back to the remembered one, because this is read at its most
+        useful when the miner is not answering and there is no summary to read
+        it from. Live first all the same: a machine renamed is a machine whose
+        remembered name is now wrong.
+        """
+        return self.miner.get("worker_id") or self.entry.data.get(CONF_WORKER_ID)
+
+    @property
+    def machine_state(self) -> str | None:
+        """What the machine says about itself when XMRig has stopped answering.
+
+        The remembered MAC is passed as a last way in, because this is read
+        precisely when the machine is off -- and a machine that was already off
+        when this integration was updated never got to teach it its name.
+        """
+        return async_machine_state(self.hass, self.worker_id, *self._lookup)
+
+    @property
+    def machine_entity(self) -> str | None:
+        """The entity the machine publishes its own state on, if it has one."""
+        return async_state_entity(self.hass, self.worker_id, *self._lookup)
+
+    @property
+    def _lookup(self) -> tuple[str | None, str | None]:
+        """The chosen device and the remembered MAC, in that order of authority."""
+        caps = self.power_capabilities
+        return (
+            self.mqtt_device,
+            self._configured_mac or (caps.mac if caps else None),
+        )
 
     @property
     def glances(self) -> dict | None:
@@ -312,20 +349,29 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         self._persist_power_capabilities(power.capabilities)
 
     def _persist_power_capabilities(self, caps: PowerCapabilities) -> None:
-        """Store the capabilities in the entry, if they have changed.
+        """Store the capabilities and the worker name in the entry, if either changed.
 
         Conditional so as not to rewrite `.storage` on every start-up for
         identical content. The integration deliberately installs no update
         listener (see __init__.py), so this write reloads nothing: it happens
         during setup, and a reload at that moment would loop.
+
+        The worker name rides along because it is remembered for the same
+        reason and learned at the same moment -- from a machine that is
+        answering -- and is wanted at the same one, when it is not.
         """
+        data = dict(self.entry.data)
         stored = caps.as_dict()
-        if self.entry.data.get(CONF_POWER_CAPS) == stored:
+        if stored != data.get(CONF_POWER_CAPS):
+            _LOGGER.debug("Power capabilities of %s remembered: %s", self.host, stored)
+            data[CONF_POWER_CAPS] = stored
+        # Only from a live summary. `self.worker_id` would happily write back
+        # what it just read out of the entry, which is not learning anything.
+        if (live := self.miner.get("worker_id")) and live != data.get(CONF_WORKER_ID):
+            data[CONF_WORKER_ID] = live
+        if data == self.entry.data:
             return
-        _LOGGER.debug("Power capabilities of %s remembered: %s", self.host, stored)
-        self.hass.config_entries.async_update_entry(
-            self.entry, data={**self.entry.data, CONF_POWER_CAPS: stored}
-        )
+        self.hass.config_entries.async_update_entry(self.entry, data=data)
 
     async def async_power_command(self, action: str) -> None:
         """Power the machine off, reboot it or suspend it.
