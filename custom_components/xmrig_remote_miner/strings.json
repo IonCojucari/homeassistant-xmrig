@@ -106,11 +106,6 @@
       "wake": {
         "name": "Wake"
       }
-    },
-    "binary_sensor": {
-      "ready": {
-        "name": "Ready"
-      }
     }
   }
 }

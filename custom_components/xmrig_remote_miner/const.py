@@ -142,11 +142,6 @@ STATE_LOST = "lost"
 MACHINE_SHUTTING_DOWN = "shutting-down"
 MACHINE_OFFLINE = "offline"
 
-# What the machine calls working properly: hashrate climbed and settled. The
-# integration computes the same thing from the XMRig summary for a machine with
-# no agent, so both kinds of rig get the sensor.
-MACHINE_READY = "ready"
-
 MACHINE_STATES = {
     MACHINE_SHUTTING_DOWN: STATE_OFF,
     MACHINE_OFFLINE: STATE_LOST,
