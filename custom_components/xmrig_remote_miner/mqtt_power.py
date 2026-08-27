@@ -313,6 +313,26 @@ def async_probe(
 
 
 @callback
+def async_state_entity(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None = None,
+    mac: str | None = None,
+) -> str | None:
+    """The entity_id of the state entity the machine publishes, if it has one."""
+    device = _find_device(hass, worker_id, device_id, mac)
+    if device is None:
+        return None
+    registry = er.async_get(hass)
+    for entry in er.async_entries_for_device(registry, device.id):
+        if entry.domain == "sensor" and "state" in (
+            f"{entry.unique_id or ''} {entry.entity_id}".lower()
+        ):
+            return entry.entity_id
+    return None
+
+
+@callback
 def async_machine_state(
     hass: HomeAssistant,
     worker_id: str | None,
@@ -331,19 +351,11 @@ def async_machine_state(
     working machine with something wrong between here and its API -- and
     reporting that as a state would paper over exactly the fault worth seeing.
     """
-    device = _find_device(hass, worker_id, device_id, mac)
-    if device is None:
+    entity_id = async_state_entity(hass, worker_id, device_id, mac)
+    if entity_id is None:
         return None
-
-    registry = er.async_get(hass)
-    for entry in er.async_entries_for_device(registry, device.id):
-        if entry.domain != "sensor":
-            continue
-        if "state" not in f"{entry.unique_id or ''} {entry.entity_id}".lower():
-            continue
-        state = hass.states.get(entry.entity_id)
-        return MACHINE_STATES.get(state.state) if state else None
-    return None
+    state = hass.states.get(entity_id)
+    return MACHINE_STATES.get(state.state) if state else None
 
 
 def send_magic_packet(mac: str, broadcast: str = "255.255.255.255") -> None:

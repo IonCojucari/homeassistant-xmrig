@@ -19,8 +19,9 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import XmrigConfigEntry
@@ -336,6 +337,35 @@ class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{description.key}"
         self._attr_device_info = coordinator.device_info
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the machine's own state entity, for the state sensor only.
+
+        The coordinator is not enough here. It reports the miner, and the miner
+        is exactly what is not answering when this matters; a poll that fails
+        the same way twice tells the entity nothing new, so nothing rewrites it.
+
+        Meanwhile the machine's word arrives over MQTT as a retained message,
+        restored whenever the MQTT integration gets round to it -- which can be
+        after this entry has finished setting up. Without this, a Home Assistant
+        restarted overnight would show a rig that has been off for hours as
+        `unavailable` until the rig came back and proved it, which is the one
+        case this sensor was extended for.
+        """
+        await super().async_added_to_hass()
+        if self.entity_description.key != "state":
+            return
+        if (entity_id := self.coordinator.machine_entity) is None:
+            return
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [entity_id], self._machine_said_something
+            )
+        )
+
+    @callback
+    def _machine_said_something(self, event) -> None:
+        self.async_write_ha_state()
 
     @property
     def available(self) -> bool:

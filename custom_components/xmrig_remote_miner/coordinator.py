@@ -44,6 +44,7 @@ from .mqtt_power import (
     PowerCapabilities,
     async_machine_state,
     async_probe,
+    async_state_entity,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -189,10 +190,18 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         precisely when the machine is off -- and a machine that was already off
         when this integration was updated never got to teach it its name.
         """
+        return async_machine_state(self.hass, self.worker_id, *self._lookup)
+
+    @property
+    def machine_entity(self) -> str | None:
+        """The entity the machine publishes its own state on, if it has one."""
+        return async_state_entity(self.hass, self.worker_id, *self._lookup)
+
+    @property
+    def _lookup(self) -> tuple[str | None, str | None]:
+        """The chosen device and the remembered MAC, in that order of authority."""
         caps = self.power_capabilities
-        return async_machine_state(
-            self.hass,
-            self.worker_id,
+        return (
             self.mqtt_device,
             self._configured_mac or (caps.mac if caps else None),
         )
