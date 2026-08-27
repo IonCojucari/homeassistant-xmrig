@@ -120,3 +120,35 @@ CAPS_MAC = "mac"
 # under `entity.sensor.state.state`.
 STATE_MINING = "mining"
 STATE_PAUSED = "paused"
+
+# Two more, and neither of them comes from XMRig -- they come from the machine
+# itself, over MQTT. They exist because "the miner did not answer" is not a
+# state: a rig switched off on purpose and a rig whose power was cut both stop
+# answering, and which one it is decides whether anybody needs to go and look.
+#
+# `off` is read from a machine that announced `shutting-down` on its way out
+# and then stopped answering. The announcement is retained, so it is still
+# there hours later, which is what makes this readable at all rather than a
+# three-second window nobody was watching.
+STATE_OFF = "off"
+
+# `lost` is the will, published by the broker on the machine's behalf because
+# the machine never got to say anything. Power cut, network gone, kernel panic.
+STATE_LOST = "lost"
+
+# What the machine publishes, as opposed to what this integration calls it. The
+# mapping is deliberate rather than passthrough: `shutting-down` is true for the
+# three seconds it takes to stop, and misleading for the ten hours afterwards.
+MACHINE_SHUTTING_DOWN = "shutting-down"
+MACHINE_OFFLINE = "offline"
+
+MACHINE_STATES = {
+    MACHINE_SHUTTING_DOWN: STATE_OFF,
+    MACHINE_OFFLINE: STATE_LOST,
+}
+
+# Remembered for the same reason as the power capabilities next to it: the
+# worker name arrives in the XMRig summary, so a Home Assistant restarted while
+# a rig was off would not know what to look for -- precisely when the answer
+# matters.
+CONF_WORKER_ID = "worker_id"

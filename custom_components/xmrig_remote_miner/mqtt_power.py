@@ -30,6 +30,7 @@ from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 
 from .const import (
     ACTION_OFF,
+    MACHINE_STATES,
     ACTION_REBOOT,
     ACTION_SUSPEND,
     CAPS_ACTIONS,
@@ -294,6 +295,37 @@ def async_probe(
 
     _LOGGER.debug("MQTT power for %s: %s mac=%s", worker_id, entities, mac)
     return power
+
+
+@callback
+def async_machine_state(
+    hass: HomeAssistant, worker_id: str | None, device_id: str | None = None
+) -> str | None:
+    """What the machine last said about itself, translated. None if it said nothing.
+
+    Read from the state entity the machine publishes, rather than by
+    subscribing here: Home Assistant's MQTT integration already holds that
+    topic, and a second subscriber to the same retained message would be a
+    second thing to keep in step with it.
+
+    Only the states that mean "gone" are translated. A machine reporting
+    `ready` while XMRig refuses to answer is not an off machine, it is a
+    working machine with something wrong between here and its API -- and
+    reporting that as a state would paper over exactly the fault worth seeing.
+    """
+    device = _find_device(hass, worker_id, device_id)
+    if device is None:
+        return None
+
+    registry = er.async_get(hass)
+    for entry in er.async_entries_for_device(registry, device.id):
+        if entry.domain != "sensor":
+            continue
+        if "state" not in f"{entry.unique_id or ''} {entry.entity_id}".lower():
+            continue
+        state = hass.states.get(entry.entity_id)
+        return MACHINE_STATES.get(state.state) if state else None
+    return None
 
 
 def send_magic_packet(mac: str, broadcast: str = "255.255.255.255") -> None:
