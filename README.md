@@ -49,16 +49,26 @@ that is what the buttons below are for.
 
 ## Host power control (optional)
 
-Three more entities appear when the host turns out to support them:
+Four more entities appear when the machine supports them:
 
 | Entity | Mechanism |
 |---|---|
-| `button.shutdown` | `rig-power off` over SSH, or a HASS.Agent command |
-| `button.reboot` | `rig-power reboot` over SSH, or a HASS.Agent command |
-| `button.suspend` | `rig-power suspend` over SSH, or HASS.Agent's *Sleep* |
+| `button.shutdown` | presses the machine's own *Shutdown* entity |
+| `button.reboot` | presses its *Restart* entity |
+| `button.suspend` | presses its *Sleep* entity |
 | `button.wake` | Wake-on-LAN magic packet |
 
-Detected the same way Glances is, at setup, from two sources tried in order.
+There is one mechanism, and it is the machine's. Each host publishes its own
+Home Assistant entities over MQTT discovery — [HASS.Agent](https://github.com/hass-agent/HASS.Agent)
+does it on Windows, the agent in the companion
+[NixOS flake](https://github.com/IonCojucari/nixos-xmrig-flake) does it on the
+rigs — and this integration simply presses them. Home Assistant never opens a
+session on the machine and never runs a command there: the machine executes its
+own poweroff, having offered the button itself.
+
+That is also why only the verbs a host actually announces become buttons. A rig
+that has not declared its board safe to suspend publishes no Sleep entity, and
+no Suspend button appears.
 
 ### Suspend, and why it is a separate verb
 
@@ -75,51 +85,27 @@ That matters for a rig switched on and off through the day — following solar
 surplus, say — where a poweroff spends a minute of every cycle rebuilding
 something that was already in memory.
 
-The button only appears when `rig-power status` names `suspend`, which on the
-[NixOS flake](https://github.com/IonCojucari/nixos-xmrig-flake) means
-`rig.power.allowSuspend` is on. Leave it off for a board you have not tested:
-S3 is firmware, and a board that sleeps but does not resume is a walk to the
-machine — the wake button would be pressing against nothing.
+Leave suspend off for a board you have not tested: S3 is firmware, and a board
+that sleeps but does not resume is a walk to the machine — the wake button
+would be pressing against nothing.
 
-**1. SSH and `rig-power`.** One session, and the machine is asked what it
-accepts:
+### Finding the machine's device
 
-```
-sudo -n rig-power status   ->  actions: off, reboot, status
-```
+Matching is automatic. HASS.Agent registers as `hass.agent-<name>`, the rig
+agent as `rig-<worker>`, and XMRig publishes that same `worker_id`, which is
+the machine name in both cases. The optional *MQTT device* field in the config
+flow is only for when those two names have drifted apart.
 
-Only the verbs it actually names become buttons. Nothing is probed by
-attempting it — asking a machine to power off in order to discover whether it
-may is not an acceptable probe, which is why the wrapper has a `status` verb.
-The same session reads the MAC of the interface holding the default route, so
-Wake-on-LAN cannot pick the wrong port on a machine with several NICs.
+The command entities are `button`s in current agents and `switch`es in older
+HASS.Agent versions. Both are accepted, and the right service is called for
+each — accepting only one form fails exactly like a missing command: the device
+is found, no buttons appear, and nothing says why.
 
-`sudo -n rig-power status` is tried first and plain `rig-power status` second,
-for hosts that have no `sudo`. The form that answered is the form used to act.
-
-**2. HASS.Agent**, if the first found nothing. Meant for Windows, which has
-neither `sudo` nor `rig-power`, and where providing them means installing
-OpenSSH Server, placing the key correctly — for an administrator account that
-is `C:\ProgramData\ssh\administrators_authorized_keys`, not
-`~/.ssh/authorized_keys` — and writing a wrapper. If
-[HASS.Agent](https://github.com/hass-agent/HASS.Agent) already runs there, all
-of that exists by another route, so its commands are pressed instead.
-
-Those commands are `button` entities in current HASS.Agent and `switch` entities
-in older ones. Both are accepted, and the right service is called for each —
-accepting only one form fails exactly like a missing command: the device is
-found, no buttons appear, and nothing says why.
-
-Matching is automatic: HASS.Agent registers as `hass.agent-<name>` and XMRig
-publishes `worker_id`, which is the machine name on both sides. The optional
-*HASS.Agent device* field in the config flow is only for when those two names
-have drifted apart.
-
-Two things to know:
+Two things to know about HASS.Agent specifically:
 
 - **The commands are not there by default.** Shutdown and Restart have to be
-  added in HASS.Agent's own *Commands* tab. A device found with no shutdown
-  command yields no buttons rather than buttons that do nothing.
+  added in its own *Commands* tab. A device found with no command entity yields
+  no action buttons rather than buttons that do nothing.
 - **The entities then exist twice**, HASS.Agent's own command and the button
   here. That is the price of one device per rig in Home Assistant — the same
   trade-off as reading Glances directly instead of adding the official
@@ -128,40 +114,35 @@ Two things to know:
 Use the plain `hass-agent/HASS.Agent` project: the original
 `LAB02-Research/HASS.Agent` has had no release since 2022.
 
-Waking cannot go over SSH — the machine is off, nothing is listening — so it is
-a UDP broadcast instead, and it is a button rather than half of a switch:
-neither half reports state, and a switch would promise one it cannot read.
+### Waking
 
-When the machine could not name its own MAC — a Windows host, or one reached
-through HASS.Agent — it is resolved by ARP from Home Assistant instead, via
-`getmac`. Strictly a fallback, and only to complete capabilities some source
-has already established: it can add a wake button to a host that has power
-buttons, never create one on a host that has none. It also needs Home Assistant
-to share the machine's layer-2 segment, which is true on a LAN and false across
-a VPN or a routed subnet — the same condition the magic packet itself has.
+Waking is the one action that cannot travel over MQTT — the machine is off, it
+runs no client — so it is a UDP broadcast instead, and a button rather than
+half of a switch: neither half reports state, and a switch would promise one it
+cannot read.
 
-`rig-power` comes from the companion
-[NixOS flake](https://github.com/IonCojucari/nixos-xmrig-flake), which grants
-the account that one wrapper and nothing else. Any host offering an equivalent
-command works just as well.
+The MAC comes from the MQTT device itself: the rig agent puts it in the
+`connections` field of its discovery payload, read from the interface holding
+the default route, so Wake-on-LAN cannot pick the wrong port on a machine with
+several NICs. HASS.Agent declares no connections, so for a Windows host the
+optional *MAC address* field in the config flow supplies it — and failing both,
+whatever MAC was last remembered for the machine is kept. A device that names
+its own MAC wins over the other two, which are typed by hand or inherited and
+cannot notice a replaced network card; but a probe finding no MAC never erases
+one, or a working wake button would vanish the moment nothing republished it.
 
-The probe result is remembered in the config entry, and the buttons are built
-from what is remembered rather than from a live probe. That is what makes the
-wake button usable at all: probing needs a machine that answers, waking is only
-ever wanted when none does. Previously the probe lived in memory only, so a
-Home Assistant restart while a rig was off produced an entry with no buttons —
-precisely when one was needed. An entry with remembered capabilities now sets
-up even when the miner is unreachable: buttons live, sensors unavailable, and
-it reloads itself as soon as the miner answers again. A probe that fails never
-erases what was known; only a successful one writes.
+The magic packet needs Home Assistant to share the machine's layer-2 segment,
+which is true on a LAN and false across a VPN or a routed subnet.
 
-**Caveats.** Host key verification is disabled (`known_hosts=None`): these are
-LAN machines whose host key changes on reinstall, and the alternative is asking
-you to maintain a `known_hosts` file inside a container. The residual risk is a
-LAN neighbour spoofing the rig's address, and what they gain is the ability to
-power it off. `asyncssh` and `getmac` are pulled in as requirements; if either is
-unavailable the affected capability is skipped rather than breaking the
-integration.
+### What is remembered
+
+The probe result is stored in the config entry, and the buttons are built from
+what is remembered rather than from a live probe. That is what makes the wake
+button usable at all: waking is only ever wanted when the machine is off. An
+entry with remembered capabilities sets up even when the miner is unreachable —
+buttons live, sensors unavailable — and reloads itself as soon as the miner
+answers again. A probe that finds nothing never erases what was known; only a
+successful one writes.
 
 ## System telemetry (optional)
 
@@ -239,8 +220,9 @@ XMRig Remote Miner*.
 ## Configuration
 
 Per miner: host, port (default 8080), access token, and poll interval
-(default 20 s), plus the optional Glances port and credentials. Everything is
-stored in the config entry, never in this repo.
+(default 20 s), plus the optional Glances port and credentials, an optional MAC
+address for Wake-on-LAN, and an optional MQTT device when auto-detection cannot
+find it. Everything is stored in the config entry, never in this repo.
 
 Everything is also editable afterwards, through *Reconfigure* on the rig's
 entry. That matters more than it sounds: the entities' `unique_id`s derive from

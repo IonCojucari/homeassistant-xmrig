@@ -1,11 +1,11 @@
 """Power buttons for the host machine.
 
-Created only when the SSH probe has confirmed the machine accepts them, on the
+Created only for the actions the machine's own MQTT device announced, on the
 same principle as the Glances sensors: a missing capability yields fewer
 entities, never inert ones.
 
-These are buttons rather than a switch because neither half reports state: SSH
-stops answering once the machine is off, and a magic packet is never
+These are buttons rather than a switch because neither half reports state: a
+machine that is off publishes nothing, and a magic packet is never
 acknowledged. A switch would promise a state it cannot read.
 """
 
@@ -24,7 +24,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import XmrigConfigEntry
 from .coordinator import XmrigCoordinator
-from .ssh import send_magic_packet
+from .mqtt_power import send_magic_packet
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,10 +76,10 @@ REBOOT = XmrigButtonDescription(
 # -- which is the difference between resuming in seconds and paying a full boot
 # plus a dataset init every time the sun goes behind a cloud.
 #
-# It only appears when `rig-power status` names it, i.e. when the rig's own
-# config has declared that this board's firmware was actually tested: a board
-# that sleeps and does not wake is not recoverable remotely, and the Wake button
-# would be pressing against nothing.
+# It only appears when the machine publishes a Sleep button, i.e. when the rig's
+# own config has declared that this board's firmware was actually tested: a
+# board that sleeps and does not wake is not recoverable remotely, and the Wake
+# button would be pressing against nothing.
 SUSPEND = XmrigButtonDescription(
     key="suspend",
     translation_key="suspend",

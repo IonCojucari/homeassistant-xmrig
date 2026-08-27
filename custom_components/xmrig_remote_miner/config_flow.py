@@ -22,17 +22,12 @@ from .const import (
     CONF_GLANCES_PASSWORD,
     CONF_GLANCES_PORT,
     CONF_GLANCES_USER,
-    CONF_HASS_AGENT_DEVICE,
+    CONF_MAC,
+    CONF_MQTT_DEVICE,
     CONF_POWER_CAPS,
-    CONF_SSH_KEY,
-    CONF_SSH_PORT,
-    CONF_SSH_USER,
     DEFAULT_GLANCES_PORT,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_SSH_KEY,
-    DEFAULT_SSH_PORT,
-    DEFAULT_SSH_USER,
     DOMAIN,
     MIN_SCAN_INTERVAL,
 )
@@ -124,32 +119,24 @@ def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
                 CONF_GLANCES_PASSWORD,
                 default=defaults.get(CONF_GLANCES_PASSWORD, ""),
             ): _SECRET,
-            # Not validated either: the machine is probed at start-up and the
-            # power buttons only appear if it answers. A missing key, or a host
-            # without rig-power, yields a rig with no buttons -- not a rig that
-            # is refused.
-            vol.Optional(
-                CONF_SSH_USER, default=defaults.get(CONF_SSH_USER, DEFAULT_SSH_USER)
-            ): str,
-            vol.Optional(
-                CONF_SSH_PORT, default=defaults.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)
-            ): _PORT,
-            vol.Optional(
-                CONF_SSH_KEY, default=defaults.get(CONF_SSH_KEY, DEFAULT_SSH_KEY)
-            ): str,
+            # Only for a machine whose MQTT device does not declare its own
+            # MAC, which in practice means a Windows host running HASS.Agent.
+            # Not validated in the form: a malformed value is ignored later and
+            # costs a wake button, whereas refusing the whole rig over it would
+            # be out of proportion.
+            vol.Optional(CONF_MAC, default=defaults.get(CONF_MAC, "")): str,
         }
     )
 
-    # The second resort, for machines that cannot answer over SSH -- typically
-    # Windows. Leaving it empty is enough in the common case: the device is
-    # found from the worker_id XMRig publishes, which is the machine name on
-    # both sides. This field is only for when the two names have drifted apart.
+    # Leaving this empty is enough in the common case: the device is found from
+    # the worker_id XMRig publishes, which is the machine name on both sides.
+    # The field is only for when the two names have drifted apart.
     # No `default`: a DeviceSelector does not accept the empty string.
-    agent = defaults.get(CONF_HASS_AGENT_DEVICE)
+    device = defaults.get(CONF_MQTT_DEVICE)
     key = (
-        vol.Optional(CONF_HASS_AGENT_DEVICE, default=agent)
-        if agent
-        else vol.Optional(CONF_HASS_AGENT_DEVICE)
+        vol.Optional(CONF_MQTT_DEVICE, default=device)
+        if device
+        else vol.Optional(CONF_MQTT_DEVICE)
     )
     fields[key] = selector.DeviceSelector(
         selector.DeviceSelectorConfig(integration="mqtt")
@@ -161,7 +148,9 @@ def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
 class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
     """Adding and reconfiguring an XMRig rig through the UI."""
 
-    VERSION = 1
+    # 2 dropped the SSH fields: host power now goes through the machine's own
+    # MQTT device, and async_migrate_entry cleans the older entries.
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

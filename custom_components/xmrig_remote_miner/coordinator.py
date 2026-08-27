@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import replace
 from datetime import timedelta
 
 import aiohttp
@@ -27,15 +26,10 @@ from .const import (
     CONF_GLANCES_PASSWORD,
     CONF_GLANCES_PORT,
     CONF_GLANCES_USER,
-    CONF_HASS_AGENT_DEVICE,
+    CONF_MAC,
+    CONF_MQTT_DEVICE,
     CONF_POWER_CAPS,
-    CONF_SSH_KEY,
-    CONF_SSH_PORT,
-    CONF_SSH_USER,
     DEFAULT_GLANCES_PORT,
-    DEFAULT_SSH_KEY,
-    DEFAULT_SSH_PORT,
-    DEFAULT_SSH_USER,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -43,16 +37,8 @@ from .const import (
     GLANCES_API_VERSIONS,
     GLANCES_PLUGINS,
     MANUFACTURER,
-    RIG_POWER_SUDO,
 )
-from .hass_agent import HassAgentPower
-from .hass_agent import async_probe as async_probe_hass_agent
-from .ssh import (
-    DISCONNECTED_ERRORS,
-    PowerCapabilities,
-    SshRunner,
-    resolve_mac_via_arp,
-)
+from .mqtt_power import MqttPower, PowerCapabilities, async_probe
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -136,12 +122,6 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         self._glances_api: int | None = None
         self._glances_auth_warned = False
 
-        self.ssh = SshRunner(
-            host=self.host,
-            port=entry.data.get(CONF_SSH_PORT, DEFAULT_SSH_PORT),
-            user=entry.data.get(CONF_SSH_USER, DEFAULT_SSH_USER),
-            key_path=entry.data.get(CONF_SSH_KEY, DEFAULT_SSH_KEY),
-        )
         # What the last successful probe established, read back from the config
         # entry. This is what lets the buttons exist even while the machine is
         # off -- the wake button is only wanted at that moment, and a probe can
@@ -150,12 +130,13 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         self.power_capabilities: PowerCapabilities | None = (
             PowerCapabilities.from_dict(entry.data.get(CONF_POWER_CAPS))
         )
-        # Explicitly chosen HASS.Agent device, or None for automatic matching
-        # on the worker_id XMRig publishes.
-        self.hass_agent_device: str | None = entry.data.get(CONF_HASS_AGENT_DEVICE)
-        # Set only when HASS.Agent is what provides power control; None means
-        # "SSH", including when there is nothing at all.
-        self._hass_agent: HassAgentPower | None = None
+        # Explicitly chosen MQTT device, or None for automatic matching on the
+        # worker_id XMRig publishes.
+        self.mqtt_device: str | None = entry.data.get(CONF_MQTT_DEVICE)
+        # Hand-typed MAC, for a machine whose MQTT device does not declare one.
+        self._configured_mac: str | None = entry.data.get(CONF_MAC)
+        # The entities to press, once the probe has found them.
+        self._power: MqttPower | None = None
         # Clamped, not trusted. The config flow now enforces a minimum, but an
         # entry created before it did could hold 0 -- and an update_interval of
         # zero means the next refresh is always overdue, i.e. a loop that polls
@@ -185,7 +166,7 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
 
     @property
     def worker_id(self) -> str | None:
-        """The name the miner gives itself. Used to find the HASS.Agent device."""
+        """The name the miner gives itself. Used to find its MQTT device."""
         return self.miner.get("worker_id") or None
 
     @property
@@ -293,49 +274,42 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         )
         return None
 
-    async def async_probe_power(self) -> None:
-        """Ask the machine once what it permits.
+    def _probe_power(self) -> MqttPower | None:
+        """Look up the machine's MQTT device, MAC fallbacks included.
 
-        Two sources, in this strict order:
-
-        1. SSH and `rig-power status`, the nominal path. A NixOS rig answers
-           here and never sees the rest.
-        2. HASS.Agent, for machines with no way to answer the first -- a Windows
-           host, in practice.
-
-        Then, only if a source has already established capabilities but without
-        a MAC, an ARP fallback for waking. That condition is not cosmetic:
-        applying the fallback to a machine whose probe returned nothing would
-        make a wake button appear on rigs that had none, merely because they
-        answer a ping. The fallback can therefore only complete, never create.
-
-        An unsuccessful probe never erases what was already known: a machine
-        that is off answers neither SSH nor ARP, and taking that silence for
-        "this machine has no wake button" would remove the button exactly when
-        it becomes useful. Only a positive result writes.
+        The MAC already remembered is the last resort, and that ordering is what
+        keeps an established wake button alive. Some entries carry a MAC that
+        nothing publishes any more -- a Windows host, whose HASS.Agent device
+        declares no connections and whose MAC was resolved once by other means.
+        Letting a probe return None for it would quietly overwrite a working
+        button with nothing, and only while the machine was off would anyone
+        find out.
         """
-        caps = await self.ssh.async_probe()
+        known = self.power_capabilities
+        return async_probe(
+            self.hass,
+            self.worker_id,
+            self.mqtt_device,
+            self._configured_mac or (known.mac if known else None),
+        )
 
-        if caps is None:
-            agent = await async_probe_hass_agent(
-                self.hass, self.worker_id, self.hass_agent_device
-            )
-            if agent is not None:
-                self._hass_agent = agent
-                caps = agent.capabilities
+    async def async_probe_power(self) -> None:
+        """Ask the machine's MQTT device once what it permits.
 
-        if caps is not None and caps.mac is None:
-            mac = await self.hass.async_add_executor_job(
-                resolve_mac_via_arp, self.host
-            )
-            if mac:
-                caps = replace(caps, mac=mac)
-
-        if caps is None:
+        An unsuccessful probe never erases what was already known. A device can
+        be missing for reasons that have nothing to do with the machine -- the
+        MQTT integration still starting, a retained discovery message not
+        replayed yet -- and taking that silence for "this machine has no wake
+        button" would remove the button exactly when it becomes useful. Only a
+        positive result writes.
+        """
+        power = self._probe_power()
+        if power is None:
             return
 
-        self.power_capabilities = caps
-        self._persist_power_capabilities(caps)
+        self._power = power
+        self.power_capabilities = power.capabilities
+        self._persist_power_capabilities(power.capabilities)
 
     def _persist_power_capabilities(self, caps: PowerCapabilities) -> None:
         """Store the capabilities in the entry, if they have changed.
@@ -354,61 +328,26 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         )
 
     async def async_power_command(self, action: str) -> None:
-        """Power the machine off, reboot it or suspend it, through whichever source declared it.
+        """Power the machine off, reboot it or suspend it.
 
-        With HASS.Agent there is nothing to catch: the command goes out over
-        MQTT and the broker acknowledges it long before the machine starts
-        shutting down.
+        There is nothing to catch here: the command goes out over MQTT and the
+        broker acknowledges it long before the machine starts acting on it. The
+        machine executing its own shutdown is what makes that true -- no session
+        is being cut from under us.
 
-        Over SSH the opposite holds: the shutdown cuts the session while it is
-        running, and depending on when systemd kills sshd, asyncssh may raise
-        instead of returning cleanly. That error *is* the expected success, so
-        it is not propagated -- otherwise Home Assistant would show a failure
-        every time the action worked perfectly.
-
-        Suspend is the same shape with a different flavour. `systemctl suspend`
-        asks logind and returns before anything happens, so the command usually
-        exits 0 and only then does the machine stop -- but if it stops first,
-        the session does not close, it *freezes*: it is the machine that went
-        away, not the socket, so there is no FIN and the timeout is what ends
-        the wait. Both outcomes land in the same except clause below, which is
-        why suspend needs no special case here.
+        The probe is retried when nothing was found at start-up. The buttons are
+        built from the capabilities remembered in the config entry, so they
+        exist while the machine is off; the entities to press are looked up
+        live, and at start-up they may simply not have been there yet.
         """
-        caps = self.power_capabilities
-
-        # An empty stored command means this host was established through
-        # HASS.Agent. After a degraded start-up the probe has not run, so
-        # _hass_agent is still None while the capabilities say otherwise --
-        # look the device up now rather than falling through to an SSH command
-        # the host has no way to answer.
-        if self._hass_agent is None and caps is not None and not caps.command:
-            self._hass_agent = await async_probe_hass_agent(
-                self.hass, self.worker_id, self.hass_agent_device
-            )
-            if self._hass_agent is None:
-                raise HomeAssistantError(
-                    f"{self.host} is driven through HASS.Agent, whose device"
-                    " cannot be found right now"
-                )
-
-        if self._hass_agent is not None:
-            await self._hass_agent.async_press(self.hass, action)
-            return
-
-        command = caps.command if caps and caps.command else RIG_POWER_SUDO
-        try:
-            await self.ssh.async_run(f"{command} {action}", timeout=20)
-        except DISCONNECTED_ERRORS:
-            _LOGGER.debug(
-                "Session cut during '%s %s' on %s: expected",
-                command,
-                action,
-                self.host,
-            )
-        except Exception as err:  # noqa: BLE001
+        if self._power is None:
+            self._power = self._probe_power()
+        if self._power is None:
             raise HomeAssistantError(
-                f"'{command} {action}' failed on {self.host}: {err}"
-            ) from err
+                f"no MQTT device found right now for {self.host}"
+            )
+
+        await self._power.async_press(self.hass, action)
 
     async def _async_get_json(self, url: str) -> dict | list:
         async with self.session.get(url, auth=self._glances_auth) as resp:

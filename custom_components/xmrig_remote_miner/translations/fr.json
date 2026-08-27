@@ -11,10 +11,8 @@
           "token": "Jeton d'accès",
           "scan_interval": "Intervalle de relevé (secondes)",
           "glances_port": "Port Glances (0 pour désactiver)",
-          "ssh_user": "Utilisateur SSH (vide = pas de contrôle machine)",
-          "ssh_port": "Port SSH",
-          "ssh_key": "Clé privée SSH",
-          "hass_agent_device": "Appareil HASS.Agent (vide = détection automatique)",
+          "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
+          "mqtt_device": "Appareil MQTT (vide = détection automatique)",
           "glances_user": "Utilisateur Glances (vide si non protégé)",
           "glances_password": "Mot de passe Glances"
         }
@@ -28,10 +26,8 @@
           "token": "Jeton d'accès",
           "scan_interval": "Intervalle de relevé (secondes)",
           "glances_port": "Port Glances (0 pour désactiver)",
-          "ssh_user": "Utilisateur SSH (vide = pas de contrôle machine)",
-          "ssh_port": "Port SSH",
-          "ssh_key": "Clé privée SSH",
-          "hass_agent_device": "Appareil HASS.Agent (vide = détection automatique)",
+          "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
+          "mqtt_device": "Appareil MQTT (vide = détection automatique)",
           "glances_user": "Utilisateur Glances (vide si non protégé)",
           "glances_password": "Mot de passe Glances"
         }
