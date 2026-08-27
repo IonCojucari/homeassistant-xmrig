@@ -29,29 +29,30 @@ from .const import STATE_LOST, STATE_MINING, STATE_OFF, STATE_PAUSED
 from .coordinator import XmrigCoordinator, miner_memory_total, miner_os
 
 
-def _hashrate_now(data: dict) -> float | None:
+def _hashrate_khs(data: dict) -> float | None:
+    """The current hashrate, in kH/s.
+
+    One unit for the fleet, and this is the readable one: past a thousand
+    hashes, "2.08 kH/s" reads at a glance where "2080.4 H/s" makes you count
+    digits. There used to be an H/s sensor beside it, kept because it carried
+    the recorded history; two sensors for one number turned out to cost more in
+    confusion -- and in picking the wrong one when configuring something -- than
+    the history was worth.
+    """
     total = (data.get("hashrate") or {}).get("total") or []
     if total and total[0] is not None:
-        return round(float(total[0]), 1)
+        return round(float(total[0]) / 1000, 2)
     return None
 
 
-def _hashrate_khs(data: dict) -> float | None:
-    """The same hashrate, in kH/s.
-
-    Two sensors for one number, deliberately: past a thousand hashes, "2.08
-    kH/s" reads at a glance where "2080.4 H/s" makes you count digits. The H/s
-    sensor stays the reference -- it is the one carrying the rigs' history -- so
-    this is added alongside rather than converting, which would have broken the
-    statistics already recorded.
-    """
-    value = _hashrate_now(data)
-    return round(value / 1000, 2) if value is not None else None
-
-
 def _hashrate_max(data: dict) -> float | None:
+    """The highest this rig has reached, in the same unit as the live one.
+
+    XMRig reports it in H/s like everything else; converting here rather than
+    leaving one sensor in a different unit is the point of the change.
+    """
     value = (data.get("hashrate") or {}).get("highest")
-    return round(float(value), 1) if value is not None else None
+    return round(float(value) / 1000, 2) if value is not None else None
 
 
 def _shares_good(data: dict) -> int | None:
@@ -178,14 +179,6 @@ SENSORS: tuple[XmrigSensorDescription, ...] = (
         value_fn=_state,
     ),
     XmrigSensorDescription(
-        key="hashrate",
-        translation_key="hashrate",
-        native_unit_of_measurement="H/s",
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:speedometer",
-        value_fn=_hashrate_now,
-    ),
-    XmrigSensorDescription(
         key="hashrate_khs",
         translation_key="hashrate_khs",
         native_unit_of_measurement="kH/s",
@@ -197,7 +190,8 @@ SENSORS: tuple[XmrigSensorDescription, ...] = (
     XmrigSensorDescription(
         key="hashrate_max",
         translation_key="hashrate_max",
-        native_unit_of_measurement="H/s",
+        native_unit_of_measurement="kH/s",
+        suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:speedometer-medium",
         entity_category=EntityCategory.DIAGNOSTIC,

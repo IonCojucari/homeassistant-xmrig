@@ -15,7 +15,12 @@ from homeassistant.core import HomeAssistant, callback
 from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS
 from .coordinator import XmrigCoordinator
 
-PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 type XmrigConfigEntry = ConfigEntry[XmrigCoordinator]
 
