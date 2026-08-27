@@ -53,9 +53,6 @@
           "lost": "Lost"
         }
       },
-      "hashrate": {
-        "name": "Hashrate"
-      },
       "hashrate_khs": {
         "name": "Hashrate (kH/s)"
       },
@@ -108,6 +105,11 @@
       },
       "wake": {
         "name": "Wake"
+      }
+    },
+    "binary_sensor": {
+      "ready": {
+        "name": "Ready"
       }
     }
   }

@@ -333,6 +333,21 @@ def async_state_entity(
 
 
 @callback
+def async_machine_raw(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None = None,
+    mac: str | None = None,
+) -> str | None:
+    """The machine's own word, untranslated. None if it has not said one."""
+    entity_id = async_state_entity(hass, worker_id, device_id, mac)
+    if entity_id is None:
+        return None
+    state = hass.states.get(entity_id)
+    return state.state if state else None
+
+
+@callback
 def async_machine_state(
     hass: HomeAssistant,
     worker_id: str | None,
@@ -351,11 +366,8 @@ def async_machine_state(
     working machine with something wrong between here and its API -- and
     reporting that as a state would paper over exactly the fault worth seeing.
     """
-    entity_id = async_state_entity(hass, worker_id, device_id, mac)
-    if entity_id is None:
-        return None
-    state = hass.states.get(entity_id)
-    return MACHINE_STATES.get(state.state) if state else None
+    raw = async_machine_raw(hass, worker_id, device_id, mac)
+    return MACHINE_STATES.get(raw) if raw else None
 
 
 def send_magic_packet(mac: str, broadcast: str = "255.255.255.255") -> None:
