@@ -35,10 +35,12 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_SCAN_INTERVAL,
+    POOL_SWITCH_SETTLE,
     GLANCES_API_VERSIONS,
     GLANCES_PLUGINS,
     MANUFACTURER,
 )
+from .pools import normalize as normalize_pool
 from .mqtt_power import (
     MqttPower,
     PowerCapabilities,
@@ -403,26 +405,33 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             # content_type=None rather than raising on the MIME type.
             return await resp.json(content_type=None)
 
-    async def async_send_command(self, method: str) -> None:
-        """Send pause/resume/stop through the json_rpc API, then refresh state.
+    async def _async_raw_request(
+        self, method: str, path: str, body: str | None = None, *, what: str
+    ) -> tuple[int, bytes]:
+        """One request over a raw socket, returning the status and the body.
 
         A raw HTTP/1.0 client rather than aiohttp: XMRig's server sometimes
         returns a duplicated response ("Data after Connection: close") which
-        aiohttp's strict parser rejects even though the command was applied.
-        Here the response is read until close and only the 200 status plus an
-        "OK" body are checked, the way curl would.
+        aiohttp's strict parser rejects even though the request was applied.
+        Here the response is read until close and interpreted the way curl
+        would -- status line, then whatever came after the headers.
+
+        `what` only names the operation in the error messages; it is the
+        difference between "XMRig unreachable" and knowing which press caused
+        it.
         """
-        body = json.dumps({"method": method, "id": 1})
-        request = (
-            f"POST /json_rpc HTTP/1.0\r\n"
-            f"Host: {self.host}:{self.port}\r\n"
-            f"Authorization: Bearer {self._token}\r\n"
-            f"Content-Type: application/json\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            f"Connection: close\r\n"
-            f"\r\n"
-            f"{body}"
-        ).encode()
+        head = [
+            f"{method} {path} HTTP/1.0",
+            f"Host: {self.host}:{self.port}",
+            f"Authorization: Bearer {self._token}",
+            "Connection: close",
+        ]
+        if body is not None:
+            head += [
+                "Content-Type: application/json",
+                f"Content-Length: {len(body.encode())}",
+            ]
+        request = ("\r\n".join(head) + "\r\n\r\n" + (body or "")).encode()
 
         try:
             async with asyncio.timeout(10):
@@ -436,19 +445,128 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
                     await writer.wait_closed()
         except (OSError, TimeoutError, asyncio.TimeoutError) as err:
             raise HomeAssistantError(
-                f"XMRig unreachable for command {method}: {err}"
+                f"XMRig unreachable for {what}: {err}"
             ) from err
 
         status_line = raw.split(b"\r\n", 1)[0]
-        if b" 200 " not in status_line and not status_line.rstrip().endswith(b"200 OK"):
+        parts = status_line.split(b" ")
+        try:
+            status = int(parts[1])
+        except (IndexError, ValueError) as err:
             raise HomeAssistantError(
-                f"XMRig refused command {method}: {status_line.decode(errors='replace')}"
-            )
-        if b'"status"' not in raw or b"OK" not in raw:
+                f"Unintelligible XMRig response for {what}:"
+                f" {status_line.decode(errors='replace')}"
+            ) from err
+
+        # The headers end at the first blank line. A duplicated response leaves
+        # a second one glued to the end of this body, which is why the callers
+        # read the first JSON value out of it rather than the whole string.
+        _, _, payload = raw.partition(b"\r\n\r\n")
+        return status, payload
+
+    async def async_send_command(self, method: str) -> None:
+        """Send pause/resume/stop through the json_rpc API, then refresh state."""
+        status, payload = await self._async_raw_request(
+            "POST",
+            "/json_rpc",
+            json.dumps({"method": method, "id": 1}),
+            what=f"command {method}",
+        )
+        if status != 200:
+            raise HomeAssistantError(f"XMRig refused command {method}: HTTP {status}")
+        if b'"status"' not in payload or b"OK" not in payload:
             raise HomeAssistantError(
                 f"Unexpected XMRig response for command {method}"
             )
 
+        await self.async_request_refresh()
+
+    # --- Pool selection -------------------------------------------------------
+
+    @property
+    def pool(self) -> str | None:
+        """The pool the miner is connected to, as it reports it."""
+        return (self.miner.get("connection") or {}).get("pool") or None
+
+    async def async_get_config(self) -> dict:
+        """The miner's live config, as XMRig would write it to disk.
+
+        Only reachable when XMRig runs with `http.restricted = false`, which is
+        also what pause and resume need -- so a rig this integration can already
+        control can be repointed too, and one that refuses this refuses those.
+        """
+        status, payload = await self._async_raw_request(
+            "GET", "/2/config", what="reading the config"
+        )
+        if status in (401, 403):
+            raise HomeAssistantError(
+                "XMRig refused the access token when reading its config"
+            )
+        if status == 404:
+            raise HomeAssistantError(
+                "This XMRig does not serve /2/config — it is running with"
+                " http.restricted enabled, so its pool cannot be changed"
+                " remotely."
+            )
+        if status != 200:
+            raise HomeAssistantError(f"XMRig refused to hand over its config: HTTP {status}")
+
+        try:
+            # raw_decode, not loads: a duplicated response would put a second
+            # copy of the JSON straight after the first, and taking the first
+            # value is exactly right in both cases.
+            config, _ = json.JSONDecoder().raw_decode(
+                payload.decode(errors="replace").lstrip()
+            )
+        except ValueError as err:
+            raise HomeAssistantError("XMRig's config did not parse as JSON") from err
+
+        if not isinstance(config, dict):
+            raise HomeAssistantError("XMRig's config was not an object")
+        return config
+
+    async def async_set_pool(self, url: str) -> None:
+        """Point the miner at `url`, keeping everything else it was told.
+
+        The config is read back and edited rather than composed here, because
+        it holds things this integration has no business inventing -- the
+        wallet, the worker name, the TLS flag, the access token itself. Only
+        the first pool's address changes; any further pools, which would be
+        failover targets, are left where they are.
+
+        XMRig applies this by reloading its config, which drops the stratum
+        connection and redials. The RandomX dataset is not rebuilt for a move
+        between pools on the same chain, so the cost is the reconnect, not a
+        restart.
+        """
+        config = await self.async_get_config()
+
+        pools = config.get("pools")
+        if not isinstance(pools, list) or not pools or not isinstance(pools[0], dict):
+            raise HomeAssistantError(
+                "XMRig reports no configured pool to replace"
+            )
+
+        primary = dict(pools[0])
+        if normalize_pool(primary.get("url") or "") == normalize_pool(url):
+            return
+        primary["url"] = url
+        config["pools"] = [primary, *pools[1:]]
+
+        status, _ = await self._async_raw_request(
+            "PUT", "/2/config", json.dumps(config), what="changing the pool"
+        )
+        if status not in range(200, 300):
+            raise HomeAssistantError(
+                f"XMRig refused the new pool: HTTP {status}"
+            )
+
+        _LOGGER.debug("%s repointed at %s", self.host, url)
+        # The miner needs a moment to drop the old connection and dial the new
+        # one; polling immediately would read the pool it has just left. The
+        # select shows the requested pool in the meantime, so this is only
+        # about how soon the sensors agree with it.
+        await asyncio.sleep(POOL_SWITCH_SETTLE)
         await self.async_request_refresh()
 
     @property

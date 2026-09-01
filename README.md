@@ -42,10 +42,62 @@ Glances' `system` plugin, which would be tidier but would add an HTTP call on
 every poll for two facts that never change. RAM *speed* and DIMM layout are in
 neither source — they need `dmidecode` and root — so they are not here.
 
+And, when the entry lists more than one pool, one more:
+
+| Entity | Notes |
+|---|---|
+| `select.pool` | which pool the rig mines to — see below |
+
 Plus host power buttons, when the machine supports them.
 
 The switch pauses the *miner*, which is not the same as powering the machine —
 that is what the buttons below are for.
+
+## Changing the pool
+
+List the pools you want to be able to choose between in the config flow, one
+per line, and a `select` appears on each rig:
+
+```
+pool.supportxmr.com:443
+Nanopool = xmr-eu1.nanopool.org:14433
+MoneroOcean = gulf.moneroocean.stream:20128
+```
+
+The label before `=` is optional; without one, the address is the label. Fewer
+than two lines means there is nothing to choose between, and no select entity
+is created — a control with a single option is a control that cannot control
+anything.
+
+Picking one reads the miner's live configuration, replaces the first pool's
+address, and pushes it back through the API's `/2/config` endpoint. Everything
+else XMRig was told is carried over untouched — the wallet, the worker name,
+the TLS flag, any further pools, which are its failover targets. The switch
+costs a stratum reconnect, not a restart: the RandomX dataset is not rebuilt
+for a move between pools on the same chain, so the hashing never stops.
+
+The select shows the pool you asked for while the miner reconnects, then the
+pool the miner reports. If the two have not agreed after a few polls it drops
+back to the truth, which is how a pool refusing the login looks from here.
+
+A rig sitting on a pool that is not in your list — one repointed by hand, or
+left on a pool since dropped from the list — shows that pool as the selection
+anyway. It is not offered as a destination; it is just where the rig is, and
+saying so is worth more than showing nothing.
+
+### Making it survive a restart
+
+`/2/config` changes the miner that is running. Whether the choice outlives that
+process is the miner's business, not this integration's: XMRig starts from
+whatever config file it is pointed at.
+
+The companion [NixOS flake](https://github.com/IonCojucari/nixos-xmrig-flake)
+handles it — its config lives in `/var/lib/xmrig`, XMRig writes the pushed
+config back there, and each start carries the chosen pool into the freshly
+generated config unless the flake's own pool value has changed since, in which
+case the rebuild wins. On any other setup, run XMRig with `"autosave": true`
+and a config file it can write, or expect the pool to revert at the next
+restart.
 
 ## Host power control (optional)
 
@@ -196,8 +248,14 @@ The HTTP API has to be enabled, tokenised, and unrestricted:
 
 `restricted: true` (the default) serves read-only summary data, which is enough
 for every sensor here but leaves the switch unable to do anything. `restricted:
-false` is what enables `pause`/`resume` — which is also why the token is not
-optional: without it, anything on the network could pause the miner.
+false` is what enables `pause`/`resume`, and the `/2/config` read and write the
+pool selector needs — which is also why the token is not optional: without it,
+anything on the network could pause the miner or point it at a stranger's
+wallet.
+
+So a rig this integration can already pause can be repointed too, and one that
+refuses the first refuses the second. Selecting a pool on a restricted miner
+fails with a message saying exactly that rather than silently doing nothing.
 
 Bind to `0.0.0.0` only on a network you trust, and firewall the port to your
 LAN.
@@ -221,8 +279,9 @@ XMRig Remote Miner*.
 
 Per miner: host, port (default 8080), access token, and poll interval
 (default 20 s), plus the optional Glances port and credentials, an optional MAC
-address for Wake-on-LAN, and an optional MQTT device when auto-detection cannot
-find it. Everything is stored in the config entry, never in this repo.
+address for Wake-on-LAN, an optional MQTT device when auto-detection cannot
+find it, and the optional list of pools to choose between. Everything is
+stored in the config entry, never in this repo.
 
 Everything is also editable afterwards, through *Reconfigure* on the rig's
 entry. That matters more than it sounds: the entities' `unique_id`s derive from

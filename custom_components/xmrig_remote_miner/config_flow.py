@@ -24,6 +24,7 @@ from .const import (
     CONF_GLANCES_USER,
     CONF_MAC,
     CONF_MQTT_DEVICE,
+    CONF_POOLS,
     CONF_POWER_CAPS,
     DEFAULT_GLANCES_PORT,
     DEFAULT_PORT,
@@ -31,6 +32,7 @@ from .const import (
     DOMAIN,
     MIN_SCAN_INTERVAL,
 )
+from .pools import parse_line
 
 # Fields to mask on entry and on display. These are secrets, and the form gets
 # filled in in the middle of a living room.
@@ -43,6 +45,35 @@ _SECRET = selector.TextSelector(
 # refresh permanently overdue, i.e. a loop polling the miner as fast as the
 # event loop allows.
 _PORT = vol.All(int, vol.Range(min=1, max=65535))
+
+# The pool list is free text, so it gets the box that looks like free text.
+_MULTILINE = selector.TextSelector(
+    selector.TextSelectorConfig(multiline=True)
+)
+
+
+def _pool_error(raw: str | None) -> str | None:
+    """Refuse a pool list that would silently lose lines, and only that.
+
+    pools.parse drops what it cannot read, because it runs long after the form
+    is gone and has nobody to tell. Here there is somebody to tell, so the same
+    lines are read again strictly: a line has to yield a pool, and a pool needs
+    a port -- an address without one is the mistake that produces a rig that
+    quietly never connects.
+    """
+    seen: set[str] = set()
+    for line in (raw or "").splitlines():
+        if not line.strip() or line.strip().startswith("#"):
+            continue
+        pool = parse_line(line)
+        # `key`, not `url`: the scheme is already stripped there, so a
+        # "stratum+ssl://" prefix does not count as the port's colon.
+        if pool is None or ":" not in pool.key:
+            return "invalid_pools"
+        if pool.key in seen:
+            return "duplicate_pools"
+        seen.add(pool.key)
+    return None
 
 
 async def _async_validate(data: dict[str, Any]) -> str | None:
@@ -125,6 +156,12 @@ def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
             # costs a wake button, whereas refusing the whole rig over it would
             # be out of proportion.
             vol.Optional(CONF_MAC, default=defaults.get(CONF_MAC, "")): str,
+            # One pool per line, "Label = host:port" or just "host:port".
+            # Fewer than two lines means no choice to make, and no select
+            # entity is created -- see select.py.
+            vol.Optional(
+                CONF_POOLS, default=defaults.get(CONF_POOLS, "")
+            ): _MULTILINE,
         }
     )
 
@@ -162,7 +199,9 @@ class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(f"{host}:{port}")
             self._abort_if_unique_id_configured()
 
-            error = await _async_validate(user_input)
+            error = _pool_error(user_input.get(CONF_POOLS)) or await _async_validate(
+                user_input
+            )
             if error is None:
                 return self.async_create_entry(
                     title=user_input[CONF_NAME], data=user_input
@@ -194,7 +233,9 @@ class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            error = await _async_validate(user_input)
+            error = _pool_error(user_input.get(CONF_POOLS)) or await _async_validate(
+                user_input
+            )
             if error is None:
                 # The remembered power capabilities are preserved: this form
                 # says nothing about them, and losing them would make the wake

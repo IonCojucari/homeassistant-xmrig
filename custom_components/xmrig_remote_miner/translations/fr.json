@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Ajouter un rig XMRig",
-        "description": "Renseignez l'adresse et le jeton d'accès HTTP de l'instance XMRig (option http.access-token du mineur). Si Glances tourne sur la même machine, ses relevés de température et de charge sont ajoutés automatiquement.",
+        "description": "Renseignez l'adresse et le jeton d'accès HTTP de l'instance XMRig (option http.access-token du mineur). Si Glances tourne sur la même machine, ses relevés de température et de charge sont ajoutés automatiquement. Indiquez au moins deux pools pour obtenir un sélecteur permettant de passer de l'un à l'autre.",
         "data": {
           "name": "Nom",
           "host": "Adresse IP ou hôte",
@@ -12,6 +12,7 @@
           "scan_interval": "Intervalle de relevé (secondes)",
           "glances_port": "Port Glances (0 pour désactiver)",
           "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
+          "pools": "Pools au choix (un par ligne)",
           "mqtt_device": "Appareil MQTT (vide = détection automatique)",
           "glances_user": "Utilisateur Glances (vide si non protégé)",
           "glances_password": "Mot de passe Glances"
@@ -27,6 +28,7 @@
           "scan_interval": "Intervalle de relevé (secondes)",
           "glances_port": "Port Glances (0 pour désactiver)",
           "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
+          "pools": "Pools au choix (un par ligne)",
           "mqtt_device": "Appareil MQTT (vide = détection automatique)",
           "glances_user": "Utilisateur Glances (vide si non protégé)",
           "glances_password": "Mot de passe Glances"
@@ -35,7 +37,9 @@
     },
     "error": {
       "cannot_connect": "Connexion impossible à cette adresse.",
-      "invalid_auth": "Jeton d'accès refusé."
+      "invalid_auth": "Jeton d'accès refusé.",
+      "invalid_pools": "Chaque ligne doit être une adresse hôte:port, éventuellement écrite « Libellé = hôte:port ».",
+      "duplicate_pools": "Le même pool est indiqué deux fois."
     },
     "abort": {
       "already_configured": "Ce rig est déjà configuré.",
@@ -105,6 +109,11 @@
       },
       "wake": {
         "name": "Démarrer"
+      }
+    },
+    "select": {
+      "pool": {
+        "name": "Pool"
       }
     }
   }
