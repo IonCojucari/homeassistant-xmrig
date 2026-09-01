@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Add an XMRig rig",
-        "description": "Enter the address and HTTP access token of the XMRig instance (the miner's http.access-token option). If Glances is running on the same machine, its temperature and load readings are added automatically.",
+        "description": "Enter the address and HTTP access token of the XMRig instance (the miner's http.access-token option). If Glances is running on the same machine, its temperature and load readings are added automatically. List two or more pools to get a selector for switching between them.",
         "data": {
           "name": "Name",
           "host": "IP address or host",
@@ -12,6 +12,7 @@
           "scan_interval": "Poll interval (seconds)",
           "glances_port": "Glances port (0 to disable)",
           "mac": "MAC address (blank = read from the MQTT device)",
+          "pools": "Pools to choose between (one per line)",
           "mqtt_device": "MQTT device (blank = auto-detect)",
           "glances_user": "Glances username (blank if unprotected)",
           "glances_password": "Glances password"
@@ -27,6 +28,7 @@
           "scan_interval": "Poll interval (seconds)",
           "glances_port": "Glances port (0 to disable)",
           "mac": "MAC address (blank = read from the MQTT device)",
+          "pools": "Pools to choose between (one per line)",
           "mqtt_device": "MQTT device (blank = auto-detect)",
           "glances_user": "Glances username (blank if unprotected)",
           "glances_password": "Glances password"
@@ -35,7 +37,9 @@
     },
     "error": {
       "cannot_connect": "Could not connect to that address.",
-      "invalid_auth": "Access token rejected."
+      "invalid_auth": "Access token rejected.",
+      "invalid_pools": "Each pool line must be a host:port address, optionally written as \"Label = host:port\".",
+      "duplicate_pools": "The same pool is listed twice."
     },
     "abort": {
       "already_configured": "This rig is already configured.",
@@ -105,6 +109,11 @@
       },
       "wake": {
         "name": "Wake"
+      }
+    },
+    "select": {
+      "pool": {
+        "name": "Pool"
       }
     }
   }

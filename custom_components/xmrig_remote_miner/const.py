@@ -9,6 +9,24 @@ DEFAULT_SCAN_INTERVAL = 20
 # the previous one finished.
 MIN_SCAN_INTERVAL = 5
 
+# --- Pool selection -----------------------------------------------------------
+#
+# The pools a rig may be pointed at, as text: one per line, "Label = url" or a
+# bare url. It lives in the config entry because nothing else knows it -- XMRig
+# reports the pool it is on and nothing about the alternatives, so the list of
+# somewhere-elses has to be written down on this side. See pools.py.
+#
+# Left empty, no select entity is created: a rig with one pool has no choice to
+# offer, and an entity with a single option is a control that cannot control
+# anything.
+CONF_POOLS = "pools"
+
+# How long to wait after repointing the miner before polling it again. XMRig
+# drops the stratum connection and redials on a config reload; asking straight
+# away reads the pool it has just left, which shows up as the select snapping
+# back to the old value for one poll.
+POOL_SWITCH_SETTLE = 3
+
 # Integration-specific config keys (the rest come from homeassistant.const:
 # CONF_NAME, CONF_HOST, CONF_PORT, CONF_TOKEN, CONF_SCAN_INTERVAL).
 MANUFACTURER = "XMRig"
