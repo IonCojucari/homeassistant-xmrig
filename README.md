@@ -163,6 +163,19 @@ Two things to know about HASS.Agent specifically:
   trade-off as reading Glances directly instead of adding the official
   integration alongside.
 
+**Hide the duplicates, do not disable them.** This applies to every agent, the
+rigs included. The buttons here work by pressing the machine's own entity, so
+disabling that entity leaves them with nothing to press — and Home Assistant
+does not treat a service call naming a disabled entity as an error, it just
+logs a line and returns, while the button has already stamped itself as
+pressed. The press then looks like it worked and the machine stays on. Hiding
+removes the duplicate from the dashboard and keeps it pressable, which is what
+was wanted in the first place.
+
+Since 0.13.0 a disabled command is found anyway and the button says so instead
+of failing silently, and it no longer takes the rig'"'"'s remembered capabilities
+down with it. The fix is still to re-enable the entity.
+
 Use the plain `hass-agent/HASS.Agent` project: the original
 `LAB02-Research/HASS.Agent` has had no release since 2022.
 

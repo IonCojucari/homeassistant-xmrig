@@ -146,13 +146,29 @@ class PowerCapabilities:
 
 
 @dataclass(frozen=True)
+class Command:
+    """One entity the machine offers, and whether it can actually be pressed.
+
+    `disabled` is carried rather than filtered on, and that is the whole point
+    of this type. A disabled entity is not created by Home Assistant, so
+    calling a service on it does nothing at all -- no error, no log line worth
+    finding. Keeping it here means the button above can exist and say why it
+    did not work, instead of the machine appearing to have no such capability.
+    """
+
+    # The domain is kept rather than guessed again later: it decides which
+    # service is called, and getting it wrong only shows up at the moment
+    # someone wants to power a machine off.
+    domain: str
+    entity_id: str
+    disabled: bool
+
+
+@dataclass(frozen=True)
 class MqttPower:
     """The MQTT entities selected for this rig, and its MAC."""
 
-    # action -> (domain, entity_id). The domain is kept rather than guessed
-    # again later: it decides which service is called, and getting it wrong only
-    # shows up at the moment someone wants to power a machine off.
-    entities: dict[str, tuple[str, str]]
+    entities: dict[str, Command]
     mac: str | None
 
     @property
@@ -161,17 +177,39 @@ class MqttPower:
 
     async def async_press(self, hass: HomeAssistant, action: str) -> None:
         """Trigger the matching action on the machine's own entity."""
-        target = self.entities.get(action)
-        if target is None:
+        command = self.entities.get(action)
+        if command is None:
             raise HomeAssistantError(
                 f"this machine does not expose the action '{action}'"
             )
-        domain, entity_id = target
-        _LOGGER.debug("MQTT power: %s -> %s.%s", action, domain, entity_id)
+
+        # Both of these used to be the same silence. Home Assistant does not
+        # raise when a service names an entity that does not exist -- it logs
+        # "Unable to find referenced entities" and returns -- while the button
+        # that called it has already stamped itself as pressed, because the
+        # timestamp is written before the action runs. So the press looked like
+        # it had worked, every time, and the machine stayed on.
+        if command.disabled:
+            raise HomeAssistantError(
+                f"{command.entity_id} is disabled in Home Assistant, so there is"
+                " nothing for this button to press. Re-enable it — and hide it"
+                " instead, if it was disabled to keep the duplicate off the"
+                " dashboard. A hidden entity still works."
+            )
+        if hass.states.get(command.entity_id) is None:
+            raise HomeAssistantError(
+                f"{command.entity_id} is not there right now — the machine has"
+                " not published it, or Home Assistant is not connected to the"
+                " broker."
+            )
+
+        _LOGGER.debug(
+            "MQTT power: %s -> %s", action, command.entity_id
+        )
         await hass.services.async_call(
-            domain,
-            _COMMAND_SERVICES[domain],
-            {"entity_id": entity_id},
+            command.domain,
+            _COMMAND_SERVICES[command.domain],
+            {"entity_id": command.entity_id},
             blocking=True,
         )
 
@@ -235,9 +273,7 @@ def _device_mac(device: dr.DeviceEntry | None) -> str | None:
     )
 
 
-def _find_commands(
-    hass: HomeAssistant, device_id: str
-) -> dict[str, tuple[str, str]]:
+def _find_commands(hass: HomeAssistant, device_id: str) -> dict[str, Command]:
     """Map each action to the entity that performs it.
 
     The registries are read on every probe rather than an entity_id being
@@ -246,20 +282,44 @@ def _find_commands(
     Matching is done on the name, unique_id included, because HASS.Agent lets
     the user name their own commands. The identifiers it generates are GUIDs, so
     it is the entity_id that carries the useful word.
+
+    `include_disabled_entities`, and it is load-bearing. It defaults to False,
+    which is the sensible default for almost every caller and was the wrong one
+    here: disabling the machine's own Shutdown entity -- the obvious thing to do
+    about the duplicate this integration knowingly creates, and something the
+    README all but suggests -- made the command invisible to this lookup. The
+    rig then probed as a machine that cannot be powered off, its remembered
+    capabilities were overwritten with none, and the buttons went away. Finding
+    it and refusing to press it says what happened; not finding it says nothing.
     """
     registry = er.async_get(hass)
-    found: dict[str, tuple[str, str]] = {}
+    found: dict[str, Command] = {}
 
-    for entry in er.async_entries_for_device(registry, device_id):
+    for entry in er.async_entries_for_device(
+        registry, device_id, include_disabled_entities=True
+    ):
         if entry.domain not in _COMMAND_SERVICES:
             continue
+        command = Command(
+            domain=entry.domain,
+            entity_id=entry.entity_id,
+            disabled=entry.disabled_by is not None,
+        )
         haystack = f"{entry.unique_id or ''} {entry.entity_id}".lower()
         if any(key in haystack for key in POWER_SHUTDOWN_KEYS):
-            found.setdefault(ACTION_OFF, (entry.domain, entry.entity_id))
+            found.setdefault(ACTION_OFF, command)
         elif any(key in haystack for key in POWER_REBOOT_KEYS):
-            found.setdefault(ACTION_REBOOT, (entry.domain, entry.entity_id))
+            found.setdefault(ACTION_REBOOT, command)
         elif any(key in haystack for key in POWER_SUSPEND_KEYS):
-            found.setdefault(ACTION_SUSPEND, (entry.domain, entry.entity_id))
+            found.setdefault(ACTION_SUSPEND, command)
+
+    if disabled := sorted(c.entity_id for c in found.values() if c.disabled):
+        _LOGGER.warning(
+            "Power commands disabled in Home Assistant: %s. The buttons for"
+            " them cannot work until they are re-enabled; hide them instead if"
+            " they were disabled to keep the dashboard clean.",
+            ", ".join(disabled),
+        )
 
     return found
 

@@ -348,8 +348,44 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             return
 
         self._power = power
-        self.power_capabilities = power.capabilities
-        self._persist_power_capabilities(power.capabilities)
+        self.power_capabilities = self._keep_known_actions(power.capabilities)
+        self._persist_power_capabilities(self.power_capabilities)
+
+    def _keep_known_actions(self, found: PowerCapabilities) -> PowerCapabilities:
+        """Never let a probe that found no command at all erase the ones known.
+
+        The promise above -- that an unsuccessful probe erases nothing -- had a
+        hole in it, and a rig fell through: a probe that finds the device and
+        its MAC but none of its commands is *successful* by the only test being
+        applied, because a wake button alone is still something. It therefore
+        wrote `actions: []` straight over `off, reboot, suspend`, and the rig
+        lost its power buttons at the next reload.
+
+        A machine that publishes a device but no command is a real case, so
+        this cannot be an error. It is simply never new information: a rig that
+        could be shut down yesterday still has the hardware for it today, and
+        the ways of reading zero commands -- discovery not replayed yet, the
+        entities disabled, MQTT still connecting -- are all conditions of this
+        Home Assistant rather than facts about the machine.
+
+        So zero commands is treated as "learned nothing", and what was already
+        known stands. A capability genuinely taken away lingers as a button
+        that says the machine does not expose that action, which is a legible
+        failure; the alternative was a wake button silently disappearing while
+        the rig was off.
+        """
+        known = self.power_capabilities
+        if found.actions or known is None or not known.actions:
+            return found
+
+        _LOGGER.debug(
+            "Probe of %s found no command entity; keeping the known %s",
+            self.host,
+            sorted(known.actions),
+        )
+        return PowerCapabilities(
+            actions=known.actions, mac=found.mac or known.mac
+        )
 
     def _persist_power_capabilities(self, caps: PowerCapabilities) -> None:
         """Store the capabilities and the worker name in the entry, if either changed.
