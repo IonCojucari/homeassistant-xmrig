@@ -22,6 +22,7 @@ from .const import (
     CONF_MQTT_DEVICE,
     CONF_POOLS,
     CONF_POWER_CAPS,
+    CONF_WORKER_ID,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -58,6 +59,7 @@ def _pool_error(raw: str | None) -> str | None:
     quietly never connects.
     """
     seen: set[str] = set()
+    labels: set[str] = set()
     for line in (raw or "").splitlines():
         if not line.strip() or line.strip().startswith("#"):
             continue
@@ -68,7 +70,12 @@ def _pool_error(raw: str | None) -> str | None:
             return "invalid_pools"
         if pool.key in seen:
             return "duplicate_pools"
+        # The select offers pools by label, so two with the same one would show
+        # as two identical options of which only one can ever be chosen.
+        if pool.label in labels:
+            return "duplicate_pool_labels"
         seen.add(pool.key)
+        labels.add(pool.label)
     return None
 
 
@@ -102,6 +109,15 @@ def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
     """
     fields: dict[Any, Any] = {}
 
+    # The fields that may be emptied are pre-filled as a suggestion, never as a
+    # default. A field the user blanks is left out of the submission, and
+    # voluptuous would put a default straight back -- so clearing the MAC, the
+    # pool list or the chosen device would silently keep the old value.
+    def _clearable(key: str) -> vol.Optional:
+        if value := defaults.get(key):
+            return vol.Optional(key, description={"suggested_value": value})
+        return vol.Optional(key)
+
     if with_name:
         # With a default: without one, a failed validation re-renders the form
         # with the name blank and still required, while every other field keeps
@@ -130,27 +146,18 @@ def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
             # Not validated in the form: a malformed value is ignored later and
             # costs a wake button, whereas refusing the whole rig over it would
             # be out of proportion.
-            vol.Optional(CONF_MAC, default=defaults.get(CONF_MAC, "")): str,
+            _clearable(CONF_MAC): str,
             # One pool per line, "Label = host:port" or just "host:port".
             # Fewer than two lines means no choice to make, and no select
             # entity is created -- see select.py.
-            vol.Optional(
-                CONF_POOLS, default=defaults.get(CONF_POOLS, "")
-            ): _MULTILINE,
+            _clearable(CONF_POOLS): _MULTILINE,
         }
     )
 
     # Leaving this empty is enough in the common case: the device is found from
     # the worker_id XMRig publishes, which is the machine name on both sides.
     # The field is only for when the two names have drifted apart.
-    # No `default`: a DeviceSelector does not accept the empty string.
-    device = defaults.get(CONF_MQTT_DEVICE)
-    key = (
-        vol.Optional(CONF_MQTT_DEVICE, default=device)
-        if device
-        else vol.Optional(CONF_MQTT_DEVICE)
-    )
-    fields[key] = selector.DeviceSelector(
+    fields[_clearable(CONF_MQTT_DEVICE)] = selector.DeviceSelector(
         selector.DeviceSelectorConfig(integration="mqtt")
     )
 
@@ -210,14 +217,15 @@ class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_input
             )
             if error is None:
-                # The remembered power capabilities are preserved: this form
-                # says nothing about them, and losing them would make the wake
-                # button disappear until the next successful probe -- that is,
-                # until the machine is switched back on, which is exactly what
-                # this is meant to avoid.
+                # What the integration remembered for itself is preserved: this
+                # form says nothing about it, and losing it would make the wake
+                # button and the off/lost state disappear until the next
+                # successful probe -- that is, until the machine is switched
+                # back on, which is exactly what this is meant to avoid.
                 updates = dict(user_input)
-                if CONF_POWER_CAPS in entry.data:
-                    updates[CONF_POWER_CAPS] = entry.data[CONF_POWER_CAPS]
+                for key in (CONF_POWER_CAPS, CONF_WORKER_ID):
+                    if key in entry.data:
+                        updates[key] = entry.data[key]
                 return self.async_update_reload_and_abort(entry, data=updates)
             errors["base"] = error
 

@@ -33,7 +33,8 @@
       "cannot_connect": "Could not connect to that address.",
       "invalid_auth": "Access token rejected.",
       "invalid_pools": "Each pool line must be a host:port address, optionally written as \"Label = host:port\".",
-      "duplicate_pools": "The same pool is listed twice."
+      "duplicate_pools": "The same pool is listed twice.",
+      "duplicate_pool_labels": "Two pools have the same label; give each one its own name."
     },
     "abort": {
       "already_configured": "This rig is already configured.",
