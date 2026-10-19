@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -16,7 +15,6 @@ from homeassistant.const import (
     PERCENTAGE,
     EntityCategory,
     UnitOfInformation,
-    UnitOfTemperature,
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -34,10 +32,7 @@ def _hashrate_khs(data: dict) -> float | None:
 
     One unit for the fleet, and this is the readable one: past a thousand
     hashes, "2.08 kH/s" reads at a glance where "2080.4 H/s" makes you count
-    digits. There used to be an H/s sensor beside it, kept because it carried
-    the recorded history; two sensors for one number turned out to cost more in
-    confusion -- and in picking the wrong one when configuring something -- than
-    the history was worth.
+    digits.
     """
     total = (data.get("hashrate") or {}).get("total") or []
     if total and total[0] is not None:
@@ -48,8 +43,8 @@ def _hashrate_khs(data: dict) -> float | None:
 def _hashrate_max(data: dict) -> float | None:
     """The highest this rig has reached, in the same unit as the live one.
 
-    XMRig reports it in H/s like everything else; converting here rather than
-    leaving one sensor in a different unit is the point of the change.
+    XMRig reports it in H/s like everything else; converting here keeps every
+    hashrate sensor in one unit.
     """
     value = (data.get("hashrate") or {}).get("highest")
     return round(float(value) / 1000, 2) if value is not None else None
@@ -93,56 +88,18 @@ def _state(data: dict) -> str | None:
     return STATE_PAUSED if data.get("paused") else STATE_MINING
 
 
-# --- Glances -----------------------------------------------------------------
-#
-# These functions receive {plugin: payload}, not the XMRig summary.
-
-# Labels that unambiguously name the CPU, in order of preference.
-# "Package id 0" on Intel, "Tdie"/"Tctl" on AMD, "cpu_thermal" on ARM.
-_CPU_TEMP_LABELS = ("package id", "tdie", "tctl", "cpu")
-
-_CORE_LABEL = re.compile(r"core\s*\d+$", re.IGNORECASE)
-
-
-def _cpu_temperature(data: dict) -> float | None:
-    """CPU temperature, or None if no probe reports it unambiguously.
-
-    Deliberately *not* the maximum of every probe: Glances also returns acpitz
-    (chassis), pch (chipset) and jc42 (memory modules), all typed
-    `temperature_core` just like the CPU. A raw maximum would end up publishing
-    the RAM's temperature under the name "CPU" as soon as the miner stops and
-    the package cools down. No reading is better than a wrong but plausible one.
-    """
-    readings = [
-        s
-        for s in (data.get("sensors") or [])
-        if isinstance(s.get("value"), (int, float))
-        and str(s.get("unit", "")).upper().endswith("C")
-    ]
-    if not readings:
-        return None
-
-    for wanted in _CPU_TEMP_LABELS:
-        for sensor in readings:
-            if str(sensor.get("label", "")).strip().lower().startswith(wanted):
-                return round(float(sensor["value"]), 1)
-
-    cores = [
-        s for s in readings if _CORE_LABEL.match(str(s.get("label", "")).strip())
-    ]
-    if cores:
-        return round(float(max(c["value"] for c in cores)), 1)
-    return None
-
-
-def _cpu_usage(data: dict) -> float | None:
-    value = (data.get("cpu") or {}).get("total")
-    return round(float(value), 1) if value is not None else None
-
-
 def _memory_usage(data: dict) -> float | None:
-    value = (data.get("mem") or {}).get("percent")
-    return round(float(value), 1) if value is not None else None
+    """RAM in use, as a percentage of the total.
+
+    XMRig takes "free" from libuv, which reads MemAvailable on Linux, so page
+    cache counts as free -- as it should, since the kernel hands it back on
+    demand.
+    """
+    memory = (data.get("resources") or {}).get("memory") or {}
+    total, free = memory.get("total"), memory.get("free")
+    if not total or free is None:
+        return None
+    return round((total - free) / total * 100, 1)
 
 
 def _load(data: dict) -> float | None:
@@ -151,13 +108,18 @@ def _load(data: dict) -> float | None:
     Relative, because "4" means nothing on its own: it is saturated on a 4-core
     machine and half idle on an 8-core one. As a percentage, 100% = every core
     busy, which compares directly from one rig to the next.
+
+    None on Windows, which has no load average: libuv reports zeros there, and
+    a rig that reads 0% while mining flat out is a wrong but plausible number.
     """
-    load = data.get("load") or {}
-    value = load.get("min15")
-    cores = load.get("cpucore")
-    if value is None or not cores:
+    if (miner_os(data) or "").startswith("Windows"):
         return None
-    return round(float(value) / float(cores) * 100, 1)
+    resources = data.get("resources") or {}
+    averages = resources.get("load_average") or []
+    cores = resources.get("hardware_concurrency")
+    if len(averages) < 3 or not cores:
+        return None
+    return round(float(averages[2]) / float(cores) * 100, 1)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -165,8 +127,6 @@ class XmrigSensorDescription(SensorEntityDescription):
     """A sensor description together with its extraction function."""
 
     value_fn: Callable[[dict], str | int | float | None]
-    # "miner" = XMRig summary, "glances" = optional system telemetry.
-    source: str = "miner"
 
 
 SENSORS: tuple[XmrigSensorDescription, ...] = (
@@ -256,28 +216,6 @@ SENSORS: tuple[XmrigSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=miner_memory_total,
     ),
-)
-
-
-GLANCES_SENSORS: tuple[XmrigSensorDescription, ...] = (
-    XmrigSensorDescription(
-        key="cpu_temperature",
-        translation_key="cpu_temperature",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        source="glances",
-        value_fn=_cpu_temperature,
-    ),
-    XmrigSensorDescription(
-        key="cpu_usage",
-        translation_key="cpu_usage",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:cpu-64-bit",
-        source="glances",
-        value_fn=_cpu_usage,
-    ),
     XmrigSensorDescription(
         key="memory_usage",
         translation_key="memory_usage",
@@ -285,7 +223,6 @@ GLANCES_SENSORS: tuple[XmrigSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:memory",
         entity_category=EntityCategory.DIAGNOSTIC,
-        source="glances",
         value_fn=_memory_usage,
     ),
     XmrigSensorDescription(
@@ -295,7 +232,6 @@ GLANCES_SENSORS: tuple[XmrigSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:chart-line",
         entity_category=EntityCategory.DIAGNOSTIC,
-        source="glances",
         value_fn=_load,
     ),
 )
@@ -307,15 +243,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    descriptions = list(SENSORS)
-
-    # The system sensors are only created if Glances answered the first poll.
-    # Otherwise the integration works exactly as before, with fewer entities --
-    # rather than with four permanently unavailable ones.
-    if coordinator.glances is not None:
-        descriptions += GLANCES_SENSORS
-
-    async_add_entities(XmrigSensor(coordinator, desc) for desc in descriptions)
+    async_add_entities(XmrigSensor(coordinator, desc) for desc in SENSORS)
 
 
 class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
@@ -367,16 +295,12 @@ class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
             # One exception, and it is the whole point of reading MQTT: when
             # the miner stops answering because the machine is off, this sensor
             # is the one entity that still has something true to say. Going
-            # unavailable here is what used to make "switched off as asked" and
-            # "fell over" look identical -- both simply stopped reporting.
+            # unavailable here would make "switched off as asked" and "fell
+            # over" look identical -- both would simply stop reporting.
             return (
                 self.entity_description.key == "state"
                 and self.coordinator.machine_state is not None
             )
-        if self.entity_description.source == "glances":
-            # Glances can go down without the miner flinching: those sensors go
-            # unavailable, the rest keep updating.
-            return self.coordinator.glances is not None
         return True
 
     @property
@@ -390,7 +314,4 @@ class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
             and not self.coordinator.last_update_success
         ):
             return self.coordinator.machine_state
-        if self.entity_description.source == "glances":
-            data = self.coordinator.glances
-            return None if data is None else self.entity_description.value_fn(data)
         return self.entity_description.value_fn(self.coordinator.miner)

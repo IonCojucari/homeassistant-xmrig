@@ -11,9 +11,8 @@ publish the same command names. That is the point: one code path, whatever the
 operating system on the other end.
 
 An accepted consequence: the shutdown entities then exist twice, the machine's
-own and the buttons created here. That is the price of one device per rig in
-Home Assistant -- the same trade-off as reading Glances directly instead of
-adding the official integration alongside.
+own and the buttons created here. That is the price of having every control
+for a rig on the rig's own device in Home Assistant.
 """
 
 from __future__ import annotations
@@ -122,9 +121,8 @@ class PowerCapabilities:
 
         Tolerant by construction, and it has to be: this data was written by an
         earlier version of the integration and lives in entries that exist in
-        production. A missing field, one of an unexpected type, or a key that no
-        longer means anything -- the `command` that used to tell SSH from
-        HASS.Agent -- must yield capabilities all the same, never an exception
+        production. A missing field, one of an unexpected type, or a key that
+        means nothing to this version must yield capabilities all the same, never an exception
         that would stop the entry loading and never a button that disappears.
         Unknown keys are ignored by simply not being read.
         """
@@ -183,12 +181,12 @@ class MqttPower:
                 f"this machine does not expose the action '{action}'"
             )
 
-        # Both of these used to be the same silence. Home Assistant does not
+        # Both checked here, because Home Assistant would not say. It does not
         # raise when a service names an entity that does not exist -- it logs
         # "Unable to find referenced entities" and returns -- while the button
         # that called it has already stamped itself as pressed, because the
-        # timestamp is written before the action runs. So the press looked like
-        # it had worked, every time, and the machine stayed on.
+        # timestamp is written before the action runs. The press would look
+        # like it had worked, every time, and the machine would stay on.
         if command.disabled:
             raise HomeAssistantError(
                 f"{command.entity_id} is disabled in Home Assistant, so there is"
@@ -284,12 +282,11 @@ def _find_commands(hass: HomeAssistant, device_id: str) -> dict[str, Command]:
     it is the entity_id that carries the useful word.
 
     `include_disabled_entities`, and it is load-bearing. It defaults to False,
-    which is the sensible default for almost every caller and was the wrong one
-    here: disabling the machine's own Shutdown entity -- the obvious thing to do
-    about the duplicate this integration knowingly creates, and something the
-    README all but suggests -- made the command invisible to this lookup. The
-    rig then probed as a machine that cannot be powered off, its remembered
-    capabilities were overwritten with none, and the buttons went away. Finding
+    which is the sensible default for almost every caller and the wrong one
+    here: disabling the machine's own Shutdown entity is the obvious thing to do
+    about the duplicate this integration knowingly creates, and without the
+    flag it would make the command invisible to this lookup. The rig would
+    probe as a machine that cannot be powered off and lose its buttons. Finding
     it and refusing to press it says what happened; not finding it says nothing.
     """
     registry = er.async_get(hass)

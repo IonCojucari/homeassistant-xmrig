@@ -7,8 +7,7 @@ import json
 import logging
 import re
 from datetime import timedelta
-
-import aiohttp
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import HomeAssistantError
@@ -23,21 +22,15 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
-    CONF_GLANCES_PASSWORD,
-    CONF_GLANCES_PORT,
-    CONF_GLANCES_USER,
     CONF_MAC,
     CONF_MQTT_DEVICE,
     CONF_WORKER_ID,
     CONF_POWER_CAPS,
-    DEFAULT_GLANCES_PORT,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_SCAN_INTERVAL,
     POOL_SWITCH_SETTLE,
-    GLANCES_API_VERSIONS,
-    GLANCES_PLUGINS,
     MANUFACTURER,
 )
 from .pools import normalize as normalize_pool
@@ -63,9 +56,8 @@ _UA_OS = re.compile(r"\(([^)]*)\)")
 def miner_os(data: dict) -> str | None:
     """The machine's OS, as XMRig describes itself.
 
-    Taken from the user-agent string rather than from Glances' `system` plugin:
-    it is already in the summary fetched on every poll, whereas Glances would
-    cost one more HTTP request each time for a fact that never changes. Less
+    Taken from the user-agent string: it is already in the summary fetched on
+    every poll, so a fact that never changes costs no request of its own. Less
     elegant, free.
     """
     match = _UA_OS.search(data.get("ua") or "")
@@ -86,50 +78,94 @@ def miner_memory_total(data: dict) -> int | None:
     return int(total) if total else None
 
 
-class XmrigCoordinator(DataUpdateCoordinator[dict]):
-    """Polls the XMRig summary and sends the control commands.
+async def async_request(
+    host: str,
+    port: int,
+    token: str,
+    method: str,
+    path: str,
+    body: str | None = None,
+    *,
+    what: str,
+) -> tuple[int, bytes]:
+    """One request to XMRig over a raw socket, returning the status and the body.
 
-    Also polls, if it answers, a Glances instance on the same machine for
-    temperature and load -- numbers XMRig does not report and that explain half
-    the hashrate variation. That second source is strictly optional: it cannot
-    fail a poll, and its sensors are not even created if Glances does not answer
-    at start-up.
+    The only HTTP client in this integration, for reads and commands alike. A
+    raw HTTP/1.0 client rather than aiohttp: XMRig's server sometimes returns a
+    duplicated response ("Data after Connection: close") which aiohttp's strict
+    parser rejects even though the request was applied, and it closes the
+    connection after every request anyway, so a connection pool would keep
+    nothing but stale sockets. Here the response is read until close and
+    interpreted the way curl would -- status line, then whatever came after
+    the headers.
 
-    A dedicated aiohttp session with ``force_close=True`` is used: XMRig answers
-    "Connection: close" on every request, which stales the connections a shared
-    pool keeps and causes intermittent ClientErrors on the command POST. Forcing
-    a fresh connection per call makes the problem disappear for both reads and
-    writes.
+    `what` only names the operation in the error messages; it is the
+    difference between "XMRig unreachable" and knowing which press caused it.
     """
+    head = [
+        f"{method} {path} HTTP/1.0",
+        f"Host: {host}:{port}",
+        f"Authorization: Bearer {token}",
+        "Connection: close",
+    ]
+    if body is not None:
+        head += [
+            "Content-Type: application/json",
+            f"Content-Length: {len(body.encode())}",
+        ]
+    request = ("\r\n".join(head) + "\r\n\r\n" + (body or "")).encode()
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        session: aiohttp.ClientSession,
-    ) -> None:
+    try:
+        async with asyncio.timeout(10):
+            reader, writer = await asyncio.open_connection(host, port)
+            try:
+                writer.write(request)
+                await writer.drain()
+                raw = await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+    except (OSError, TimeoutError, asyncio.TimeoutError) as err:
+        raise HomeAssistantError(f"XMRig unreachable for {what}: {err}") from err
+
+    status_line = raw.split(b"\r\n", 1)[0]
+    parts = status_line.split(b" ")
+    try:
+        status = int(parts[1])
+    except (IndexError, ValueError) as err:
+        raise HomeAssistantError(
+            f"Unintelligible XMRig response for {what}:"
+            f" {status_line.decode(errors='replace')}"
+        ) from err
+
+    # The headers end at the first blank line. A duplicated response leaves
+    # a second one glued to the end of this body, which is why the callers
+    # read the first JSON value out of it rather than the whole string.
+    _, _, payload = raw.partition(b"\r\n\r\n")
+    return status, payload
+
+
+def first_json(payload: bytes) -> Any:
+    """The first JSON value in a response body. Raises ValueError.
+
+    raw_decode, not loads: a duplicated response would put a second copy of
+    the JSON straight after the first, and taking the first value is exactly
+    right in both cases.
+    """
+    value, _ = json.JSONDecoder().raw_decode(
+        payload.decode(errors="replace").lstrip()
+    )
+    return value
+
+
+class XmrigCoordinator(DataUpdateCoordinator[dict]):
+    """Polls the XMRig summary and sends the control commands."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.entry = entry
-        self.session = session
         self.host: str = entry.data[CONF_HOST]
         self.port: int = entry.data.get(CONF_PORT, DEFAULT_PORT)
         self._token: str = entry.data[CONF_TOKEN]
-        self.glances_port: int = entry.data.get(
-            CONF_GLANCES_PORT, DEFAULT_GLANCES_PORT
-        )
-        # Glances HTTP Basic credentials, when it asks for them. Absent for an
-        # unprotected instance, which is still Glances' default.
-        glances_user = entry.data.get(CONF_GLANCES_USER)
-        self._glances_auth: aiohttp.BasicAuth | None = (
-            aiohttp.BasicAuth(
-                glances_user, entry.data.get(CONF_GLANCES_PASSWORD) or ""
-            )
-            if glances_user
-            else None
-        )
-        # The Glances API version settled on at first contact, or None while
-        # none has been reached successfully yet.
-        self._glances_api: int | None = None
-        self._glances_auth_warned = False
 
         # What the last successful probe established, read back from the config
         # entry. This is what lets the buttons exist even while the machine is
@@ -146,7 +182,7 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         self._configured_mac: str | None = entry.data.get(CONF_MAC)
         # The entities to press, once the probe has found them.
         self._power: MqttPower | None = None
-        # Clamped, not trusted. The config flow now enforces a minimum, but an
+        # Clamped, not trusted. The config flow enforces a minimum, but an
         # entry created before it did could hold 0 -- and an update_interval of
         # zero means the next refresh is always overdue, i.e. a loop that polls
         # the miner's HTTP API as fast as the event loop allows.
@@ -171,7 +207,7 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
     @property
     def miner(self) -> dict:
         """The XMRig summary from the last poll."""
-        return (self.data or {}).get("miner") or {}
+        return self.data or {}
 
     @property
     def worker_id(self) -> str | None:
@@ -209,110 +245,24 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             self._configured_mac or (caps.mac if caps else None),
         )
 
-    @property
-    def glances(self) -> dict | None:
-        """Glances telemetry, or None if unavailable/disabled."""
-        return (self.data or {}).get("glances")
-
-    @property
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}"}
-
     async def _async_update_data(self) -> dict:
-        """Poll the miner, then the system telemetry if it is there.
-
-        Only XMRig can fail the poll. Glances is a bonus: a telemetry outage
-        must not take the hashrate and the shares down with it, or the
-        measurement is lost at exactly the moment it is needed.
-        """
-        miner = await self._async_fetch_miner()
-        return {"miner": miner, "glances": await self._async_fetch_glances()}
-
-    async def _async_fetch_miner(self) -> dict:
         try:
-            async with asyncio.timeout(10):
-                async with self.session.get(
-                    f"{self.base_url}/1/summary", headers=self._headers
-                ) as resp:
-                    if resp.status in (401, 403):
-                        raise UpdateFailed("access token refused (401/403)")
-                    resp.raise_for_status()
-                    return await resp.json()
-        except (TimeoutError, asyncio.TimeoutError) as err:
-            raise UpdateFailed("timed out polling XMRig") from err
-        except aiohttp.ClientError as err:
-            raise UpdateFailed(f"connection error talking to XMRig: {err}") from err
-
-    async def _async_fetch_glances(self) -> dict | None:
-        """Return {plugin: payload}, or None if Glances does not answer."""
-        if not self.glances_port:
-            return None
-
-        versions = (
-            (self._glances_api,) if self._glances_api else GLANCES_API_VERSIONS
-        )
-        for version in versions:
-            base = f"http://{self.host}:{self.glances_port}/api/{version}"
-            try:
-                async with asyncio.timeout(10):
-                    # return_exceptions, so that one plugin failing does not
-                    # abandon the other three still in flight: gather would
-                    # propagate immediately and leave them running outside this
-                    # timeout with nobody collecting their results, which shows
-                    # up as "Task exception was never retrieved". The normal way
-                    # to hit that is a Glances 3 host being asked for /api/4.
-                    results = await asyncio.gather(
-                        *(self._async_get_json(f"{base}/{p}") for p in GLANCES_PLUGINS),
-                        return_exceptions=True,
-                    )
-            except (TimeoutError, asyncio.TimeoutError):
-                continue
-
-            # One failure disqualifies this API version, with one exception
-            # worth telling apart: a 401/403 is not "Glances is absent" but
-            # "Glances is there and refuses these credentials". Without that
-            # distinction, a protected instance with the wrong password looks
-            # exactly like a machine with no Glances -- four sensors that never
-            # exist, and nothing to say why.
-            failure = next(
-                (r for r in results if isinstance(r, BaseException)), None
+            status, payload = await self._async_raw_request(
+                "GET", "/1/summary", what="the summary poll"
             )
-            if failure is not None:
-                if (
-                    isinstance(failure, aiohttp.ClientResponseError)
-                    and failure.status in (401, 403)
-                ):
-                    # Warn once. The poll runs every 20 seconds and a wrong
-                    # password stays wrong until someone fixes it; repeating
-                    # would teach nothing and drown the log.
-                    if not self._glances_auth_warned:
-                        self._glances_auth_warned = True
-                        _LOGGER.warning(
-                            "Glances on %s:%s refuses the credentials (%s) —"
-                            " system sensors skipped. Fix them with"
-                            " Reconfigure on this rig.",
-                            self.host,
-                            self.glances_port,
-                            failure.status,
-                        )
-                    return None
-                continue
-
-            self._glances_api = version
-            return dict(zip(GLANCES_PLUGINS, results, strict=True))
-
-        # Unlatch the remembered version. Without this, a rig upgraded from
-        # Glances 3 to 4 would keep being asked for /api/3 forever: the loop
-        # above narrows to the remembered version once one has worked, so a
-        # permanent 404 there would take the system sensors down until the
-        # entry was reloaded.
-        self._glances_api = None
-        _LOGGER.debug(
-            "Glances unreachable on %s:%s, system sensors skipped",
-            self.host,
-            self.glances_port,
-        )
-        return None
+        except HomeAssistantError as err:
+            raise UpdateFailed(str(err)) from err
+        if status in (401, 403):
+            raise UpdateFailed("access token refused (401/403)")
+        if status != 200:
+            raise UpdateFailed(f"XMRig answered the summary poll with HTTP {status}")
+        try:
+            summary = first_json(payload)
+        except ValueError as err:
+            raise UpdateFailed("XMRig's summary did not parse as JSON") from err
+        if not isinstance(summary, dict):
+            raise UpdateFailed("XMRig's summary was not an object")
+        return summary
 
     def _probe_power(self) -> MqttPower | None:
         """Look up the machine's MQTT device, MAC fallbacks included.
@@ -354,12 +304,11 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
     def _keep_known_actions(self, found: PowerCapabilities) -> PowerCapabilities:
         """Never let a probe that found no command at all erase the ones known.
 
-        The promise above -- that an unsuccessful probe erases nothing -- had a
-        hole in it, and a rig fell through: a probe that finds the device and
-        its MAC but none of its commands is *successful* by the only test being
-        applied, because a wake button alone is still something. It therefore
-        wrote `actions: []` straight over `off, reboot, suspend`, and the rig
-        lost its power buttons at the next reload.
+        A probe that finds the device and its MAC but none of its commands
+        counts as successful, because a wake button alone is still something.
+        Taken at face value it would write `actions: []` straight over `off,
+        reboot, suspend`, and the rig would lose its power buttons at the next
+        reload.
 
         A machine that publishes a device but no command is a real case, so
         this cannot be an error. It is simply never new information: a rig that
@@ -434,71 +383,12 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
 
         await self._power.async_press(self.hass, action)
 
-    async def _async_get_json(self, url: str) -> dict | list:
-        async with self.session.get(url, auth=self._glances_auth) as resp:
-            resp.raise_for_status()
-            # Glances serves JSON as text/html on some versions, hence
-            # content_type=None rather than raising on the MIME type.
-            return await resp.json(content_type=None)
-
     async def _async_raw_request(
         self, method: str, path: str, body: str | None = None, *, what: str
     ) -> tuple[int, bytes]:
-        """One request over a raw socket, returning the status and the body.
-
-        A raw HTTP/1.0 client rather than aiohttp: XMRig's server sometimes
-        returns a duplicated response ("Data after Connection: close") which
-        aiohttp's strict parser rejects even though the request was applied.
-        Here the response is read until close and interpreted the way curl
-        would -- status line, then whatever came after the headers.
-
-        `what` only names the operation in the error messages; it is the
-        difference between "XMRig unreachable" and knowing which press caused
-        it.
-        """
-        head = [
-            f"{method} {path} HTTP/1.0",
-            f"Host: {self.host}:{self.port}",
-            f"Authorization: Bearer {self._token}",
-            "Connection: close",
-        ]
-        if body is not None:
-            head += [
-                "Content-Type: application/json",
-                f"Content-Length: {len(body.encode())}",
-            ]
-        request = ("\r\n".join(head) + "\r\n\r\n" + (body or "")).encode()
-
-        try:
-            async with asyncio.timeout(10):
-                reader, writer = await asyncio.open_connection(self.host, self.port)
-                try:
-                    writer.write(request)
-                    await writer.drain()
-                    raw = await reader.read()
-                finally:
-                    writer.close()
-                    await writer.wait_closed()
-        except (OSError, TimeoutError, asyncio.TimeoutError) as err:
-            raise HomeAssistantError(
-                f"XMRig unreachable for {what}: {err}"
-            ) from err
-
-        status_line = raw.split(b"\r\n", 1)[0]
-        parts = status_line.split(b" ")
-        try:
-            status = int(parts[1])
-        except (IndexError, ValueError) as err:
-            raise HomeAssistantError(
-                f"Unintelligible XMRig response for {what}:"
-                f" {status_line.decode(errors='replace')}"
-            ) from err
-
-        # The headers end at the first blank line. A duplicated response leaves
-        # a second one glued to the end of this body, which is why the callers
-        # read the first JSON value out of it rather than the whole string.
-        _, _, payload = raw.partition(b"\r\n\r\n")
-        return status, payload
+        return await async_request(
+            self.host, self.port, self._token, method, path, body, what=what
+        )
 
     async def async_send_command(self, method: str) -> None:
         """Send pause/resume/stop through the json_rpc API, then refresh state."""
@@ -548,12 +438,7 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             raise HomeAssistantError(f"XMRig refused to hand over its config: HTTP {status}")
 
         try:
-            # raw_decode, not loads: a duplicated response would put a second
-            # copy of the JSON straight after the first, and taking the first
-            # value is exactly right in both cases.
-            config, _ = json.JSONDecoder().raw_decode(
-                payload.decode(errors="replace").lstrip()
-            )
+            config = first_json(payload)
         except ValueError as err:
             raise HomeAssistantError("XMRig's config did not parse as JSON") from err
 

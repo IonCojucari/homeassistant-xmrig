@@ -1,8 +1,8 @@
 """Pool selection for an XMRig rig.
 
 Created only when the entry lists more than one pool, on the same principle as
-the Glances sensors and the power buttons: a missing capability yields fewer
-entities, never inert ones. A rig with one pool has nothing to choose between,
+the power buttons: a missing capability yields fewer entities, never inert
+ones. A rig with one pool has nothing to choose between,
 and a select with a single option is a control that cannot control anything.
 """
 
