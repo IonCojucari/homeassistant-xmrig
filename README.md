@@ -14,8 +14,8 @@ One device per miner, each with:
 | Entity | Notes |
 |---|---|
 | `switch` | ON = mining, OFF = paused. Uses the API's `pause`/`resume` methods, so the process stays alive and the RandomX dataset stays allocated — resuming is instant. |
-| `sensor.hashrate` | H/s, 10-second window |
-| `sensor.hashrate_max` | H/s, peak since start |
+| `sensor.hashrate_khs` | kH/s, 10-second window |
+| `sensor.hashrate_max` | kH/s, peak since start |
 | `sensor.shares_good` | accepted shares |
 | `sensor.shares_rejected` | rejected shares |
 | `sensor.uptime` | seconds |
@@ -25,22 +25,19 @@ One device per miner, each with:
 | `sensor.os` | operating system, read from XMRig's own user-agent string |
 | `sensor.memory_total` | total RAM, which is what makes the memory-usage percentage mean something |
 
-And, when [Glances](https://nicolargo.github.io/glances/) is reachable on the
-same machine, four more — the numbers XMRig does not report but that explain
-most of the hashrate you are looking at:
+| `sensor.memory_usage` | % of RAM in use, from XMRig's own `resources` block |
+| `sensor.load` | 15-minute load average as a percentage of core count, so it compares across machines. Unavailable on Windows, which has no load average. |
+
+All of these come out of the one summary request made on every poll.
+`sensor.os` is read from XMRig's user-agent string, so it costs no request of
+its own. RAM *speed* and DIMM layout are not in the summary — they need
+`dmidecode` and root — so they are not here.
+
+And, when the machine's own agent publishes a CPU temperature, one more:
 
 | Entity | Notes |
 |---|---|
-| `sensor.cpu_temperature` | °C. Thermal throttling is the usual reason a rig quietly loses hashrate. |
-| `sensor.cpu_usage` | % |
-| `sensor.memory_usage` | % |
-| `sensor.load` | 15-minute load average as a percentage of core count, so it compares across machines |
-
-`sensor.os` and `sensor.memory_total` come out of the summary that is fetched
-anyway, so they cost no extra request. They are deliberately not read from
-Glances' `system` plugin, which would be tidier but would add an HTTP call on
-every poll for two facts that never change. RAM *speed* and DIMM layout are in
-neither source — they need `dmidecode` and root — so they are not here.
+| `sensor.cpu_temperature` | °C, mirrored from the machine's MQTT device — see [CPU temperature](#cpu-temperature). Thermal throttling is the usual reason a rig quietly loses hashrate. |
 
 And, when the entry lists more than one pool, one more:
 
@@ -159,9 +156,8 @@ Two things to know about HASS.Agent specifically:
   added in its own *Commands* tab. A device found with no command entity yields
   no action buttons rather than buttons that do nothing.
 - **The entities then exist twice**, HASS.Agent's own command and the button
-  here. That is the price of one device per rig in Home Assistant — the same
-  trade-off as reading Glances directly instead of adding the official
-  integration alongside.
+  here. That is the price of having every control for a rig on the rig's own
+  device in Home Assistant.
 
 **Hide the duplicates, do not disable them.** This applies to every agent, the
 rigs included. The buttons here work by pressing the machine's own entity, so
@@ -173,7 +169,7 @@ removes the duplicate from the dashboard and keeps it pressable, which is what
 was wanted in the first place.
 
 Since 0.13.0 a disabled command is found anyway and the button says so instead
-of failing silently, and it no longer takes the rig'"'"'s remembered capabilities
+of failing silently, and it no longer takes the rig's remembered capabilities
 down with it. The fix is still to re-enable the entity.
 
 Use the plain `hass-agent/HASS.Agent` project: the original
@@ -209,41 +205,29 @@ buttons live, sensors unavailable — and reloads itself as soon as the miner
 answers again. A probe that finds nothing never erases what was known; only a
 successful one writes.
 
-## System telemetry (optional)
+## CPU temperature
 
-Glances is polled on port 61208 if something answers there. Fill in the Glances
-username and password when it runs behind HTTP Basic — which is how the NixOS
-flake serves it, since that API hands out the process list and the logged-in
-users, not just a temperature. Leave both blank for an unprotected instance,
-such as the Home Assistant add-on. Credentials that are refused log one warning
-and disable the system sensors, rather than looking identical to a machine with
-no Glances at all.
+XMRig does not report temperatures, so the machine's own agent publishes one on
+its MQTT device, next to the power commands, and this integration mirrors it onto
+the rig's device. It is found on that device by what it measures — a
+`temperature` device class, or a unit of °C — and only created if it exists
+when the entry sets up.
 
-It is strictly optional and deliberately unable to break anything:
+**Windows (HASS.Agent).** Run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+on the machine. It makes its readings available over WMI. Then add a *WMI
+Query* sensor in HASS.Agent's *Sensors* tab:
 
-- if Glances does not answer when the entry is set up, the four system sensors
-  are simply never created — the integration works as before, with fewer
-  entities rather than four permanently-unavailable ones;
-- if Glances stops answering later, those sensors go unavailable and the miner
-  sensors keep updating. A telemetry outage must not take the hashrate reading
-  down with it;
-- set the Glances port to `0` to disable it entirely.
+- Scope: `root\LibreHardwareMonitor`
+- Query: `SELECT Value FROM Sensor WHERE SensorType='Temperature' AND Name='CPU Package'`
 
-Only four plugins are read (`sensors`, `cpu`, `mem`, `load`), and both API
-versions are handled — Glances 4 serves `/api/4/…`, Glances 3 `/api/3/…`, with
-the same field names for what is read here.
+AMD CPUs name it `Core (Tctl/Tdie)` rather than `CPU Package`. LibreHardwareMonitor's
+own window shows the exact name. Windows' built-in
+`MSAcpi_ThermalZoneTemperature` class is not a substitute: on most boards it
+reports an ACPI zone, not the CPU, and often a constant.
 
-CPU temperature is picked by label — `Package id` on Intel, `Tdie`/`Tctl` on
-AMD, then the hottest `Core N` — rather than by taking the maximum of every
-probe. Glances reports chassis (`acpitz`), chipset (`pch_*`) and DIMM (`jc42`)
-probes under the same `temperature_core` type, so a plain maximum reports the
-RAM temperature as the CPU's as soon as the miner stops and the package cools.
-No reading is better than a plausible wrong one.
-
-Home Assistant also ships an official Glances integration, which exposes far
-more. Use it instead if you want the full picture; the point of reading Glances
-here is to get temperature and load onto the *same device* as the hashrate,
-without two devices per rig.
+**NixOS rigs.** The rig agent in the companion flake publishes the package
+temperature itself, read from hwmon by label (`Package id 0` on Intel,
+`Tctl`/`Tdie` on AMD).
 
 ## Requirements on the miner
 
@@ -291,7 +275,7 @@ XMRig Remote Miner*.
 ## Configuration
 
 Per miner: host, port (default 8080), access token, and poll interval
-(default 20 s), plus the optional Glances port and credentials, an optional MAC
+(default 20 s), plus an optional MAC
 address for Wake-on-LAN, an optional MQTT device when auto-detection cannot
 find it, and the optional list of pools to choose between. Everything is
 stored in the config entry, never in this repo.

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
@@ -16,22 +14,20 @@ from homeassistant.const import (
     CONF_SCAN_INTERVAL,
     CONF_TOKEN,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_GLANCES_PASSWORD,
-    CONF_GLANCES_PORT,
-    CONF_GLANCES_USER,
     CONF_MAC,
     CONF_MQTT_DEVICE,
     CONF_POOLS,
     CONF_POWER_CAPS,
-    DEFAULT_GLANCES_PORT,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_SCAN_INTERVAL,
 )
+from .coordinator import async_request
 from .pools import parse_line
 
 # Fields to mask on entry and on display. These are secrets, and the form gets
@@ -78,22 +74,20 @@ def _pool_error(raw: str | None) -> str | None:
 
 async def _async_validate(data: dict[str, Any]) -> str | None:
     """Return None if the connection is good, otherwise an error code."""
-    host = data[CONF_HOST]
-    port = data.get(CONF_PORT, DEFAULT_PORT)
-    url = f"http://{host}:{port}/1/summary"
-    headers = {"Authorization": f"Bearer {data[CONF_TOKEN]}"}
     try:
-        connector = aiohttp.TCPConnector(force_close=True)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with asyncio.timeout(10):
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status in (401, 403):
-                        return "invalid_auth"
-                    if resp.status != 200:
-                        return "cannot_connect"
-    except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError):
+        status, _ = await async_request(
+            data[CONF_HOST],
+            data.get(CONF_PORT, DEFAULT_PORT),
+            data[CONF_TOKEN],
+            "GET",
+            "/1/summary",
+            what="the connection test",
+        )
+    except HomeAssistantError:
         return "cannot_connect"
-    return None
+    if status in (401, 403):
+        return "invalid_auth"
+    return None if status == 200 else "cannot_connect"
 
 
 def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
@@ -131,25 +125,6 @@ def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
                 CONF_SCAN_INTERVAL,
                 default=defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
             ): vol.All(int, vol.Range(min=MIN_SCAN_INTERVAL)),
-            # Not validated: if Glances does not answer, the system sensors
-            # are simply not created. Refusing to add the rig because an
-            # optional source is missing would be disproportionate.
-            # min=0 rather than 1: 0 is the documented "no Glances" value.
-            vol.Optional(
-                CONF_GLANCES_PORT,
-                default=defaults.get(CONF_GLANCES_PORT, DEFAULT_GLANCES_PORT),
-            ): vol.All(int, vol.Range(min=0, max=65535)),
-            # Glances is unauthenticated out of the box, but can run behind
-            # HTTP Basic -- which is how the NixOS rigs serve it, since its API
-            # exposes the process list and the logged-in users. Leaving both
-            # fields blank sends no credential.
-            vol.Optional(
-                CONF_GLANCES_USER, default=defaults.get(CONF_GLANCES_USER, "")
-            ): str,
-            vol.Optional(
-                CONF_GLANCES_PASSWORD,
-                default=defaults.get(CONF_GLANCES_PASSWORD, ""),
-            ): _SECRET,
             # Only for a machine whose MQTT device does not declare its own
             # MAC, which in practice means a Windows host running HASS.Agent.
             # Not validated in the form: a malformed value is ignored later and
@@ -185,9 +160,9 @@ def _schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Schema:
 class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
     """Adding and reconfiguring an XMRig rig through the UI."""
 
-    # 2 dropped the SSH fields: host power now goes through the machine's own
-    # MQTT device, and async_migrate_entry cleans the older entries.
-    VERSION = 2
+    # 2 dropped the SSH fields, 3 the Glances ones; async_migrate_entry cleans
+    # the older entries.
+    VERSION = 3
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -219,11 +194,9 @@ class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Correct a rig that is already added, without deleting it.
 
-        There used to be no way to do this: changing a token, a Glances port or
-        a credential meant deleting the entry and recreating it, which changes
-        its `entry_id`. The entities' `unique_id`s derive from that -- so every
-        entity would have been renamed and all long-term history lost, over one
-        edited password.
+        Deleting and recreating the entry would change its `entry_id`, and the
+        entities' `unique_id`s derive from that -- so every entity would be
+        renamed and all long-term history lost, over one edited token.
 
         The entry's own `unique_id` is deliberately not touched here. It only
         ever served to stop the same rig being added twice; making it follow an

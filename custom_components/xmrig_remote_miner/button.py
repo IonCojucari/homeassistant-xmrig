@@ -1,8 +1,7 @@
 """Power buttons for the host machine.
 
-Created only for the actions the machine's own MQTT device announced, on the
-same principle as the Glances sensors: a missing capability yields fewer
-entities, never inert ones.
+Created only for the actions the machine's own MQTT device announced: a missing
+capability yields fewer entities, never inert ones.
 
 These are buttons rather than a switch because neither half reports state: a
 machine that is off publishes nothing, and a magic packet is never

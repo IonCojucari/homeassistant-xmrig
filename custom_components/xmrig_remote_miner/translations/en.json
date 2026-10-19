@@ -3,19 +3,16 @@
     "step": {
       "user": {
         "title": "Add an XMRig rig",
-        "description": "Enter the address and HTTP access token of the XMRig instance (the miner's http.access-token option). If Glances is running on the same machine, its temperature and load readings are added automatically. List two or more pools to get a selector for switching between them.",
+        "description": "Enter the address and HTTP access token of the XMRig instance (the miner's http.access-token option). List two or more pools to get a selector for switching between them.",
         "data": {
           "name": "Name",
           "host": "IP address or host",
           "port": "API port",
           "token": "Access token",
           "scan_interval": "Poll interval (seconds)",
-          "glances_port": "Glances port (0 to disable)",
           "mac": "MAC address (blank = read from the MQTT device)",
           "pools": "Pools to choose between (one per line)",
-          "mqtt_device": "MQTT device (blank = auto-detect)",
-          "glances_user": "Glances username (blank if unprotected)",
-          "glances_password": "Glances password"
+          "mqtt_device": "MQTT device (blank = auto-detect)"
         }
       },
       "reconfigure": {
@@ -26,12 +23,9 @@
           "port": "API port",
           "token": "Access token",
           "scan_interval": "Poll interval (seconds)",
-          "glances_port": "Glances port (0 to disable)",
           "mac": "MAC address (blank = read from the MQTT device)",
           "pools": "Pools to choose between (one per line)",
-          "mqtt_device": "MQTT device (blank = auto-detect)",
-          "glances_user": "Glances username (blank if unprotected)",
-          "glances_password": "Glances password"
+          "mqtt_device": "MQTT device (blank = auto-detect)"
         }
       }
     },
@@ -78,12 +72,6 @@
       "ping": {
         "name": "Pool ping"
       },
-      "cpu_temperature": {
-        "name": "CPU temperature"
-      },
-      "cpu_usage": {
-        "name": "CPU usage"
-      },
       "memory_usage": {
         "name": "Memory used"
       },
@@ -95,6 +83,9 @@
       },
       "memory_total": {
         "name": "Total RAM"
+      },
+      "cpu_temperature": {
+        "name": "CPU temperature"
       }
     },
     "button": {

@@ -3,19 +3,16 @@
     "step": {
       "user": {
         "title": "Ajouter un rig XMRig",
-        "description": "Renseignez l'adresse et le jeton d'accès HTTP de l'instance XMRig (option http.access-token du mineur). Si Glances tourne sur la même machine, ses relevés de température et de charge sont ajoutés automatiquement. Indiquez au moins deux pools pour obtenir un sélecteur permettant de passer de l'un à l'autre.",
+        "description": "Renseignez l'adresse et le jeton d'accès HTTP de l'instance XMRig (option http.access-token du mineur). Indiquez au moins deux pools pour obtenir un sélecteur permettant de passer de l'un à l'autre.",
         "data": {
           "name": "Nom",
           "host": "Adresse IP ou hôte",
           "port": "Port de l'API",
           "token": "Jeton d'accès",
           "scan_interval": "Intervalle de relevé (secondes)",
-          "glances_port": "Port Glances (0 pour désactiver)",
           "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
           "pools": "Pools au choix (un par ligne)",
-          "mqtt_device": "Appareil MQTT (vide = détection automatique)",
-          "glances_user": "Utilisateur Glances (vide si non protégé)",
-          "glances_password": "Mot de passe Glances"
+          "mqtt_device": "Appareil MQTT (vide = détection automatique)"
         }
       },
       "reconfigure": {
@@ -26,12 +23,9 @@
           "port": "Port de l'API",
           "token": "Jeton d'accès",
           "scan_interval": "Intervalle de relevé (secondes)",
-          "glances_port": "Port Glances (0 pour désactiver)",
           "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
           "pools": "Pools au choix (un par ligne)",
-          "mqtt_device": "Appareil MQTT (vide = détection automatique)",
-          "glances_user": "Utilisateur Glances (vide si non protégé)",
-          "glances_password": "Mot de passe Glances"
+          "mqtt_device": "Appareil MQTT (vide = détection automatique)"
         }
       }
     },
@@ -78,12 +72,6 @@
       "ping": {
         "name": "Ping pool"
       },
-      "cpu_temperature": {
-        "name": "Température CPU"
-      },
-      "cpu_usage": {
-        "name": "Utilisation CPU"
-      },
       "memory_usage": {
         "name": "Mémoire utilisée"
       },
@@ -95,6 +83,9 @@
       },
       "memory_total": {
         "name": "RAM totale"
+      },
+      "cpu_temperature": {
+        "name": "Température CPU"
       }
     },
     "button": {

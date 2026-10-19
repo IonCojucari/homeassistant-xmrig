@@ -6,13 +6,12 @@ sensors and its run/pause switch.
 
 from __future__ import annotations
 
-import aiohttp
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 
-from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS
+from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS, DOMAIN
 from .coordinator import XmrigCoordinator
 
 PLATFORMS: list[Platform] = [
@@ -25,35 +24,53 @@ PLATFORMS: list[Platform] = [
 type XmrigConfigEntry = ConfigEntry[XmrigCoordinator]
 
 
+# Keys that older entries carry and nothing reads: the SSH power control of
+# version 1, and the Glances telemetry of version 2.
+_OBSOLETE_KEYS = {
+    1: ("ssh_user", "ssh_port", "ssh_key"),
+    2: ("glances_port", "glances_user", "glances_password"),
+}
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Drop what host power control no longer needs, from entries written before it changed.
+    """Drop the settings of mechanisms this integration no longer has.
 
-    Version 1 entries carry SSH credentials, a key path and a `command` inside
-    the remembered capabilities, none of which mean anything now that the
-    machine executes its own power actions. Nothing here would break if they
-    stayed -- they are simply never read -- but a stale SSH key path sitting in
-    a config entry is the kind of thing someone finds in two years and believes.
-    So they go, explicitly and once, rather than lingering.
+    Nothing would break if they stayed -- they are simply never read -- but a
+    stale SSH key path or Glances password sitting in a config entry is the
+    kind of thing someone finds in two years and believes. So they go,
+    explicitly and once, rather than lingering.
 
-    The device field is renamed rather than dropped: it still points at the same
-    MQTT device, it just no longer belongs only to HASS.Agent.
+    From version 1, the device field is also renamed rather than dropped: it
+    still points at the same MQTT device, it just does not belong only to
+    HASS.Agent.
     """
-    if entry.version > 1:
+    if entry.version >= 3:
         return True
 
-    data = {
-        k: v
-        for k, v in entry.data.items()
-        if k not in ("ssh_user", "ssh_port", "ssh_key")
-    }
-    if (device := data.pop("hass_agent_device", None)) is not None:
-        data[CONF_MQTT_DEVICE] = device
-    if isinstance(caps := data.get(CONF_POWER_CAPS), dict):
-        data[CONF_POWER_CAPS] = {
-            k: v for k, v in caps.items() if k in (CAPS_ACTIONS, CAPS_MAC)
-        }
+    data = dict(entry.data)
+    for version, keys in _OBSOLETE_KEYS.items():
+        if entry.version <= version:
+            for key in keys:
+                data.pop(key, None)
 
-    hass.config_entries.async_update_entry(entry, data=data, version=2)
+    if entry.version == 1:
+        if (device := data.pop("hass_agent_device", None)) is not None:
+            data[CONF_MQTT_DEVICE] = device
+        if isinstance(caps := data.get(CONF_POWER_CAPS), dict):
+            data[CONF_POWER_CAPS] = {
+                k: v for k, v in caps.items() if k in (CAPS_ACTIONS, CAPS_MAC)
+            }
+
+    # Glances' CPU usage has no source left, so its entity would linger as "no
+    # longer provided" forever. Its CPU temperature is not removed: the same
+    # unique_id is reused by the mirrored temperature, history included.
+    registry = er.async_get(hass)
+    if entity_id := registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_cpu_usage"
+    ):
+        registry.async_remove(entity_id)
+
+    hass.config_entries.async_update_entry(entry, data=data, version=3)
     return True
 
 
@@ -74,33 +91,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> boo
     sensors are unavailable, and the coordinator recovers on its own as soon as
     the miner answers.
     """
-    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(force_close=True))
-    coordinator = XmrigCoordinator(hass, entry, session)
+    coordinator = XmrigCoordinator(hass, entry)
 
-    try:
-        if coordinator.power_capabilities is None:
-            await coordinator.async_config_entry_first_refresh()
-        else:
-            # Does not raise: only sets last_update_success.
-            await coordinator.async_refresh()
+    if coordinator.power_capabilities is None:
+        await coordinator.async_config_entry_first_refresh()
+    else:
+        # Does not raise: only sets last_update_success.
+        await coordinator.async_refresh()
 
-        # Probing looks for the machine's MQTT device, so it only makes sense
-        # once the miner has answered and named itself. The result is stored in the config
-        # entry, which is what makes the degraded start-up above possible next
-        # time. Never raises: a machine that exposes nothing simply yields a rig
-        # with no buttons.
-        if coordinator.last_update_success:
-            await coordinator.async_probe_power()
+    # Probing looks for the machine's MQTT device, so it only makes sense once
+    # the miner has answered and named itself. The result is stored in the
+    # config entry, which is what makes the degraded start-up above possible
+    # next time. Never raises: a machine that exposes nothing simply yields a
+    # rig with no buttons.
+    if coordinator.last_update_success:
+        await coordinator.async_probe_power()
 
-        # Inside the try as well: a platform raising here fails the setup and
-        # Home Assistant retries, and every attempt that left this out stranded
-        # a live ClientSession and its connector -- one per retry, each with an
-        # "Unclosed client session" warning behind it.
-        entry.runtime_data = coordinator
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    except Exception:
-        await session.close()
-        raise
+    entry.runtime_data = coordinator
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     if not coordinator.last_update_success:
         _async_reload_when_miner_returns(hass, entry, coordinator)
@@ -118,11 +126,12 @@ def _async_reload_when_miner_returns(
 ) -> None:
     """Reload the entry on the first successful poll after a degraded start-up.
 
-    Platforms decide *at setup time* which entities exist: the Glances sensors
-    are only created if Glances answered, and the buttons only from the known
-    capabilities. Starting against a machine that is off therefore freezes an
-    incomplete list, which would stay that way until the next Home Assistant
-    restart. Reloading as soon as the miner answers rebuilds it.
+    Setup decides once what it can only learn from a running machine: the
+    buttons come from the capabilities probed at that moment, and the state
+    sensor subscribes to the machine's state entity if one was found. Starting
+    against a machine that is off therefore freezes an incomplete picture,
+    which would stay that way until the next Home Assistant restart. Reloading
+    as soon as the miner answers rebuilds it.
 
     The reload unloads the entry, which removes this listener; the flag only
     prevents scheduling two reloads if several polls succeed in the same window.
@@ -141,8 +150,5 @@ def _async_reload_when_miner_returns(
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> bool:
-    """Unload a rig and close its HTTP session."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        await entry.runtime_data.session.close()
-    return unload_ok
+    """Unload a rig."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

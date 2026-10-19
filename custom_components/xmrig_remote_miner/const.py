@@ -31,29 +31,6 @@ POOL_SWITCH_SETTLE = 3
 # CONF_NAME, CONF_HOST, CONF_PORT, CONF_TOKEN, CONF_SCAN_INTERVAL).
 MANUFACTURER = "XMRig"
 
-# Optional system telemetry, served by Glances on the same machine.
-# 0 disables polling it entirely.
-CONF_GLANCES_PORT = "glances_port"
-DEFAULT_GLANCES_PORT = 61208
-
-# Glances' REST API is unauthenticated out of the box, but it can be run behind
-# HTTP Basic (`glances -w -u <user>` with a password file), which is how the
-# NixOS rigs serve it -- its API exposes the process list and logged-in users,
-# so leaving it open while the XMRig API next door demanded a token was an
-# asymmetry worth closing. Both fields blank means no credential is sent, which
-# is what an unprotected Glances (the Home Assistant add-on, for instance)
-# expects.
-CONF_GLANCES_USER = "glances_user"
-CONF_GLANCES_PASSWORD = "glances_password"
-
-# Glances 4 serves /api/4/<plugin>, Glances 3 serves /api/3/<plugin>. The fields
-# read here have the same names in both, so try one then the other at start-up
-# and keep whichever answered.
-GLANCES_API_VERSIONS = (4, 3)
-
-# The only plugins that say anything useful about a miner.
-GLANCES_PLUGINS = ("sensors", "cpu", "mem", "load")
-
 # --- Host machine power control (optional) ------------------------------------
 #
 # One mechanism, and only one: find the machine's MQTT device and press the
@@ -125,8 +102,7 @@ WOL_PORT = 9
 # needed.
 #
 # The result is therefore stored in the config entry, which survives restarts,
-# and the buttons are built from that. The probe now only discovers and
-# corrects.
+# and the buttons are built from that. The probe only discovers and corrects.
 CONF_POWER_CAPS = "power_caps"
 CAPS_ACTIONS = "actions"
 CAPS_MAC = "mac"

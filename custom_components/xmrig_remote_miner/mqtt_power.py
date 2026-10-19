@@ -11,9 +11,8 @@ publish the same command names. That is the point: one code path, whatever the
 operating system on the other end.
 
 An accepted consequence: the shutdown entities then exist twice, the machine's
-own and the buttons created here. That is the price of one device per rig in
-Home Assistant -- the same trade-off as reading Glances directly instead of
-adding the official integration alongside.
+own and the buttons created here. That is the price of having every control
+for a rig on the rig's own device in Home Assistant.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant, callback
@@ -122,9 +122,8 @@ class PowerCapabilities:
 
         Tolerant by construction, and it has to be: this data was written by an
         earlier version of the integration and lives in entries that exist in
-        production. A missing field, one of an unexpected type, or a key that no
-        longer means anything -- the `command` that used to tell SSH from
-        HASS.Agent -- must yield capabilities all the same, never an exception
+        production. A missing field, one of an unexpected type, or a key that
+        means nothing to this version must yield capabilities all the same, never an exception
         that would stop the entry loading and never a button that disappears.
         Unknown keys are ignored by simply not being read.
         """
@@ -183,12 +182,12 @@ class MqttPower:
                 f"this machine does not expose the action '{action}'"
             )
 
-        # Both of these used to be the same silence. Home Assistant does not
+        # Both checked here, because Home Assistant would not say. It does not
         # raise when a service names an entity that does not exist -- it logs
         # "Unable to find referenced entities" and returns -- while the button
         # that called it has already stamped itself as pressed, because the
-        # timestamp is written before the action runs. So the press looked like
-        # it had worked, every time, and the machine stayed on.
+        # timestamp is written before the action runs. The press would look
+        # like it had worked, every time, and the machine would stay on.
         if command.disabled:
             raise HomeAssistantError(
                 f"{command.entity_id} is disabled in Home Assistant, so there is"
@@ -231,11 +230,10 @@ def _find_device(
 
     if worker_id:
         for prefix in DEVICE_IDENTIFIER_PREFIXES:
-            device = registry.async_get_device(
+            if devices := registry.async_get_devices(
                 identifiers={(MQTT_DOMAIN, f"{prefix}{worker_id}")}
-            )
-            if device is not None:
-                return device
+            ):
+                return devices[0]
 
     # The MAC, last, and it is not a nicety: the worker name arrives in the
     # XMRig summary, so a machine that has been off since before this
@@ -247,9 +245,10 @@ def _find_device(
     # new machine-id and therefore a new worker name, while the network card
     # stays put.
     if (mac := _clean_mac(mac)) is not None:
-        return registry.async_get_device(
+        devices = registry.async_get_devices(
             connections={(CONNECTION_NETWORK_MAC, mac)}
         )
+        return devices[0] if devices else None
     return None
 
 
@@ -284,12 +283,11 @@ def _find_commands(hass: HomeAssistant, device_id: str) -> dict[str, Command]:
     it is the entity_id that carries the useful word.
 
     `include_disabled_entities`, and it is load-bearing. It defaults to False,
-    which is the sensible default for almost every caller and was the wrong one
-    here: disabling the machine's own Shutdown entity -- the obvious thing to do
-    about the duplicate this integration knowingly creates, and something the
-    README all but suggests -- made the command invisible to this lookup. The
-    rig then probed as a machine that cannot be powered off, its remembered
-    capabilities were overwritten with none, and the buttons went away. Finding
+    which is the sensible default for almost every caller and the wrong one
+    here: disabling the machine's own Shutdown entity is the obvious thing to do
+    about the duplicate this integration knowingly creates, and without the
+    flag it would make the command invisible to this lookup. The rig would
+    probe as a machine that cannot be powered off and lose its buttons. Finding
     it and refusing to press it says what happened; not finding it says nothing.
     """
     registry = er.async_get(hass)
@@ -372,6 +370,35 @@ def async_probe(
     return power
 
 
+def _machine_sensors(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None,
+    mac: str | None,
+    match: Callable[[er.RegistryEntry], bool],
+) -> list[er.RegistryEntry]:
+    """The sensors on the machine's MQTT device that `match` accepts."""
+    device = _find_device(hass, worker_id, device_id, mac)
+    if device is None:
+        return []
+    registry = er.async_get(hass)
+    return [
+        entry
+        for entry in er.async_entries_for_device(registry, device.id)
+        if entry.domain == "sensor" and match(entry)
+    ]
+
+
+def _names(entry: er.RegistryEntry) -> str:
+    return f"{entry.unique_id or ''} {entry.entity_id}".lower()
+
+
+# Words that put a temperature on the CPU rather than on the GPU, a disk or the
+# chassis: the rig agent's own name for it, and what a LibreHardwareMonitor
+# query is usually called.
+_CPU_WORDS = ("cpu", "package", "tctl", "tdie")
+
+
 @callback
 def async_state_entity(
     hass: HomeAssistant,
@@ -380,16 +407,40 @@ def async_state_entity(
     mac: str | None = None,
 ) -> str | None:
     """The entity_id of the state entity the machine publishes, if it has one."""
-    device = _find_device(hass, worker_id, device_id, mac)
-    if device is None:
-        return None
-    registry = er.async_get(hass)
-    for entry in er.async_entries_for_device(registry, device.id):
-        if entry.domain == "sensor" and "state" in (
-            f"{entry.unique_id or ''} {entry.entity_id}".lower()
-        ):
-            return entry.entity_id
-    return None
+    found = _machine_sensors(
+        hass, worker_id, device_id, mac, lambda entry: "state" in _names(entry)
+    )
+    return found[0].entity_id if found else None
+
+
+@callback
+def async_temperature_entity(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None = None,
+    mac: str | None = None,
+) -> str | None:
+    """The entity_id of the CPU temperature the machine publishes, if any.
+
+    A temperature is recognised by what it measures rather than by its name:
+    the rig agent declares a temperature device class, while a HASS.Agent WMI
+    sensor has no device class at all and only says °C. Which temperature is
+    the CPU's is then decided by its name, and only a machine with a single
+    temperature gets the benefit of the doubt -- a GPU or a disk reported as
+    the CPU is a wrong but plausible reading, and no reading is better.
+    """
+    found = _machine_sensors(
+        hass,
+        worker_id,
+        device_id,
+        mac,
+        lambda entry: entry.original_device_class == "temperature"
+        or entry.unit_of_measurement in ("°C", "°F"),
+    )
+    cpu = [entry for entry in found if any(w in _names(entry) for w in _CPU_WORDS)]
+    if cpu:
+        return cpu[0].entity_id
+    return found[0].entity_id if len(found) == 1 else None
 
 
 @callback
