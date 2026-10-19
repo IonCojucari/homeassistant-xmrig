@@ -19,9 +19,14 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_entity_registry_updated_event,
+    async_track_state_change_event,
+)
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from . import XmrigConfigEntry
 from .const import STATE_LOST, STATE_MINING, STATE_OFF, STATE_PAUSED
@@ -242,8 +247,13 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
+    # No load sensor for a rig known to run Windows, which has no load average
+    # to report: it would stay empty forever.
+    windows = (miner_os(coordinator.miner) or "").startswith("Windows")
     entities: list[SensorEntity] = [
-        XmrigSensor(coordinator, desc) for desc in SENSORS
+        XmrigSensor(coordinator, desc)
+        for desc in SENSORS
+        if not (windows and desc.key == "load")
     ]
     # Only when the machine publishes one: a rig without a temperature sensor
     # gets no permanently empty one here.
@@ -330,6 +340,10 @@ class XmrigTemperatureSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
     device -- the rig agent's on NixOS, a HASS.Agent WMI sensor on Windows --
     onto the rig's device, next to the hashrate it explains. Thermal
     throttling is the usual reason a rig quietly loses hashrate.
+
+    Its availability follows the source, not the miner: a rig whose XMRig has
+    fallen over while the machine keeps running is exactly the one whose
+    temperature is worth reading.
     """
 
     _attr_has_entity_name = True
@@ -342,26 +356,70 @@ class XmrigTemperatureSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
     def __init__(self, coordinator: XmrigCoordinator, source: str) -> None:
         super().__init__(coordinator)
         self._source = source
+        self._unsub_state: Callable[[], None] | None = None
         self._attr_unique_id = f"{coordinator.entry.entry_id}_cpu_temperature"
         self._attr_device_info = coordinator.device_info
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self._follow_source()
+        self.async_on_remove(self._stop_following)
+        # A renamed source keeps its registry entry and changes its entity_id;
+        # without this the mirror would stay subscribed to a name nobody uses.
         self.async_on_remove(
-            async_track_state_change_event(
-                self.hass, [self._source], self._source_changed
+            async_track_entity_registry_updated_event(
+                self.hass, self._source, self._source_renamed
             )
         )
+
+    @callback
+    def _follow_source(self) -> None:
+        self._unsub_state = async_track_state_change_event(
+            self.hass, [self._source], self._source_changed
+        )
+
+    @callback
+    def _stop_following(self) -> None:
+        if self._unsub_state is not None:
+            self._unsub_state()
+            self._unsub_state = None
+
+    @callback
+    def _source_renamed(self, event) -> None:
+        if event.data["action"] != "update" or "old_entity_id" not in event.data:
+            return
+        self._stop_following()
+        self._source = event.data["entity_id"]
+        self._follow_source()
+        self.async_write_ha_state()
 
     @callback
     def _source_changed(self, event) -> None:
         self.async_write_ha_state()
 
     @property
+    def available(self) -> bool:
+        return self.native_value is not None
+
+    @property
     def native_value(self) -> float | None:
         state = self.hass.states.get(self._source)
+        if state is None:
+            return None
         try:
-            return float(state.state) if state else None
+            value = float(state.state)
         except ValueError:
             # "unknown" or "unavailable", while the machine has said nothing.
             return None
+        # The source states its own unit, and on an imperial install Home
+        # Assistant has already converted a temperature device class to °F.
+        # Taking that number as °C would convert it a second time.
+        unit = state.attributes.get("unit_of_measurement")
+        if unit and unit != UnitOfTemperature.CELSIUS:
+            try:
+                return TemperatureConverter.convert(
+                    value, unit, UnitOfTemperature.CELSIUS
+                )
+            except HomeAssistantError:
+                return None
+        return value

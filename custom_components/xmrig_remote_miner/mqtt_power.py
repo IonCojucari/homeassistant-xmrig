@@ -230,11 +230,10 @@ def _find_device(
 
     if worker_id:
         for prefix in DEVICE_IDENTIFIER_PREFIXES:
-            device = registry.async_get_device(
+            if devices := registry.async_get_devices(
                 identifiers={(MQTT_DOMAIN, f"{prefix}{worker_id}")}
-            )
-            if device is not None:
-                return device
+            ):
+                return devices[0]
 
     # The MAC, last, and it is not a nicety: the worker name arrives in the
     # XMRig summary, so a machine that has been off since before this
@@ -246,9 +245,10 @@ def _find_device(
     # new machine-id and therefore a new worker name, while the network card
     # stays put.
     if (mac := _clean_mac(mac)) is not None:
-        return registry.async_get_device(
+        devices = registry.async_get_devices(
             connections={(CONNECTION_NETWORK_MAC, mac)}
         )
+        return devices[0] if devices else None
     return None
 
 
@@ -370,26 +370,33 @@ def async_probe(
     return power
 
 
-def _machine_sensor(
+def _machine_sensors(
     hass: HomeAssistant,
     worker_id: str | None,
     device_id: str | None,
     mac: str | None,
     match: Callable[[er.RegistryEntry], bool],
-) -> str | None:
-    """The first sensor on the machine's MQTT device that `match` accepts."""
+) -> list[er.RegistryEntry]:
+    """The sensors on the machine's MQTT device that `match` accepts."""
     device = _find_device(hass, worker_id, device_id, mac)
     if device is None:
-        return None
+        return []
     registry = er.async_get(hass)
-    return next(
-        (
-            entry.entity_id
-            for entry in er.async_entries_for_device(registry, device.id)
-            if entry.domain == "sensor" and match(entry)
-        ),
-        None,
-    )
+    return [
+        entry
+        for entry in er.async_entries_for_device(registry, device.id)
+        if entry.domain == "sensor" and match(entry)
+    ]
+
+
+def _names(entry: er.RegistryEntry) -> str:
+    return f"{entry.unique_id or ''} {entry.entity_id}".lower()
+
+
+# Words that put a temperature on the CPU rather than on the GPU, a disk or the
+# chassis: the rig agent's own name for it, and what a LibreHardwareMonitor
+# query is usually called.
+_CPU_WORDS = ("cpu", "package", "tctl", "tdie")
 
 
 @callback
@@ -400,13 +407,10 @@ def async_state_entity(
     mac: str | None = None,
 ) -> str | None:
     """The entity_id of the state entity the machine publishes, if it has one."""
-    return _machine_sensor(
-        hass,
-        worker_id,
-        device_id,
-        mac,
-        lambda entry: "state" in f"{entry.unique_id or ''} {entry.entity_id}".lower(),
+    found = _machine_sensors(
+        hass, worker_id, device_id, mac, lambda entry: "state" in _names(entry)
     )
+    return found[0].entity_id if found else None
 
 
 @callback
@@ -418,18 +422,25 @@ def async_temperature_entity(
 ) -> str | None:
     """The entity_id of the CPU temperature the machine publishes, if any.
 
-    Recognised by what it measures rather than by its name: the rig agent
-    declares a temperature device class, while a HASS.Agent WMI sensor has no
-    device class at all and only says °C.
+    A temperature is recognised by what it measures rather than by its name:
+    the rig agent declares a temperature device class, while a HASS.Agent WMI
+    sensor has no device class at all and only says °C. Which temperature is
+    the CPU's is then decided by its name, and only a machine with a single
+    temperature gets the benefit of the doubt -- a GPU or a disk reported as
+    the CPU is a wrong but plausible reading, and no reading is better.
     """
-    return _machine_sensor(
+    found = _machine_sensors(
         hass,
         worker_id,
         device_id,
         mac,
         lambda entry: entry.original_device_class == "temperature"
-        or entry.unit_of_measurement == "°C",
+        or entry.unit_of_measurement in ("°C", "°F"),
     )
+    cpu = [entry for entry in found if any(w in _names(entry) for w in _CPU_WORDS)]
+    if cpu:
+        return cpu[0].entity_id
+    return found[0].entity_id if len(found) == 1 else None
 
 
 @callback

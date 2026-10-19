@@ -103,9 +103,12 @@ async def async_request(
     `what` only names the operation in the error messages; it is the
     difference between "XMRig unreachable" and knowing which press caused it.
     """
+    # An IPv6 literal may be stored bracketed, as it is written in a URL. The
+    # socket wants it bare and the Host header wants it bracketed.
+    bare = host.strip("[]")
     head = [
         f"{method} {path} HTTP/1.0",
-        f"Host: {host}:{port}",
+        f"Host: {f'[{bare}]' if ':' in bare else bare}:{port}",
         f"Authorization: Bearer {token}",
         "Connection: close",
     ]
@@ -118,7 +121,7 @@ async def async_request(
 
     try:
         async with asyncio.timeout(10):
-            reader, writer = await asyncio.open_connection(host, port)
+            reader, writer = await asyncio.open_connection(bare, port)
             try:
                 writer.write(request)
                 await writer.drain()
@@ -126,7 +129,9 @@ async def async_request(
             finally:
                 writer.close()
                 await writer.wait_closed()
-    except (OSError, TimeoutError, asyncio.TimeoutError) as err:
+    # ValueError as well: a host name with an empty or over-long label fails in
+    # the IDNA codec with a UnicodeError, before any socket exists.
+    except (OSError, ValueError, TimeoutError, asyncio.TimeoutError) as err:
         raise HomeAssistantError(f"XMRig unreachable for {what}: {err}") from err
 
     status_line = raw.split(b"\r\n", 1)[0]

@@ -9,8 +9,9 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 
-from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS
+from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS, DOMAIN
 from .coordinator import XmrigCoordinator
 
 PLATFORMS: list[Platform] = [
@@ -59,6 +60,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data[CONF_POWER_CAPS] = {
                 k: v for k, v in caps.items() if k in (CAPS_ACTIONS, CAPS_MAC)
             }
+
+    # Glances' CPU usage has no source left, so its entity would linger as "no
+    # longer provided" forever. Its CPU temperature is not removed: the same
+    # unique_id is reused by the mirrored temperature, history included.
+    registry = er.async_get(hass)
+    if entity_id := registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_cpu_usage"
+    ):
+        registry.async_remove(entity_id)
 
     hass.config_entries.async_update_entry(entry, data=data, version=3)
     return True
