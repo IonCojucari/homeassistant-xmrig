@@ -15,6 +15,7 @@ from homeassistant.const import (
     PERCENTAGE,
     EntityCategory,
     UnitOfInformation,
+    UnitOfTemperature,
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -178,7 +179,6 @@ SENSORS: tuple[XmrigSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.SECONDS,
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:timer-outline",
         value_fn=_uptime,
     ),
@@ -231,7 +231,6 @@ SENSORS: tuple[XmrigSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:chart-line",
-        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_load,
     ),
 )
@@ -243,7 +242,14 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities(XmrigSensor(coordinator, desc) for desc in SENSORS)
+    entities: list[SensorEntity] = [
+        XmrigSensor(coordinator, desc) for desc in SENSORS
+    ]
+    # Only when the machine publishes one: a rig without a temperature sensor
+    # gets no permanently empty one here.
+    if (source := coordinator.temperature_entity) is not None:
+        entities.append(XmrigTemperatureSensor(coordinator, source))
+    async_add_entities(entities)
 
 
 class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
@@ -315,3 +321,47 @@ class XmrigSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
         ):
             return self.coordinator.machine_state
         return self.entity_description.value_fn(self.coordinator.miner)
+
+
+class XmrigTemperatureSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
+    """CPU temperature, as the machine's own agent publishes it.
+
+    XMRig does not report one, so this mirrors the sensor on the machine's MQTT
+    device -- the rig agent's on NixOS, a HASS.Agent WMI sensor on Windows --
+    onto the rig's device, next to the hashrate it explains. Thermal
+    throttling is the usual reason a rig quietly loses hashrate.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "cpu_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: XmrigCoordinator, source: str) -> None:
+        super().__init__(coordinator)
+        self._source = source
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_cpu_temperature"
+        self._attr_device_info = coordinator.device_info
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [self._source], self._source_changed
+            )
+        )
+
+    @callback
+    def _source_changed(self, event) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> float | None:
+        state = self.hass.states.get(self._source)
+        try:
+            return float(state.state) if state else None
+        except ValueError:
+            # "unknown" or "unavailable", while the machine has said nothing.
+            return None

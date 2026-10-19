@@ -40,6 +40,7 @@ from .mqtt_power import (
     async_machine_state,
     async_probe,
     async_state_entity,
+    async_temperature_entity,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -235,6 +236,11 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
     def machine_entity(self) -> str | None:
         """The entity the machine publishes its own state on, if it has one."""
         return async_state_entity(self.hass, self.worker_id, *self._lookup)
+
+    @property
+    def temperature_entity(self) -> str | None:
+        """The CPU temperature the machine publishes, if it has one."""
+        return async_temperature_entity(self.hass, self.worker_id, *self._lookup)
 
     @property
     def _lookup(self) -> tuple[str | None, str | None]:

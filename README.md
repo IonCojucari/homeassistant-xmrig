@@ -33,9 +33,11 @@ All of these come out of the one summary request made on every poll.
 its own. RAM *speed* and DIMM layout are not in the summary — they need
 `dmidecode` and root — so they are not here.
 
-CPU temperature is not read here, because XMRig does not report it. Publish it
-from the agent that already runs on the machine, and it appears on the machine's
-MQTT device — see [CPU temperature](#cpu-temperature).
+And, when the machine's own agent publishes a CPU temperature, one more:
+
+| Entity | Notes |
+|---|---|
+| `sensor.cpu_temperature` | °C, mirrored from the machine's MQTT device — see [CPU temperature](#cpu-temperature). Thermal throttling is the usual reason a rig quietly loses hashrate. |
 
 And, when the entry lists more than one pool, one more:
 
@@ -205,9 +207,11 @@ successful one writes.
 
 ## CPU temperature
 
-XMRig does not report temperatures, so this integration does not create a
-temperature sensor. The machine's own agent publishes one instead, on its MQTT
-device, next to the power commands.
+XMRig does not report temperatures, so the machine's own agent publishes one on
+its MQTT device, next to the power commands, and this integration mirrors it onto
+the rig's device. It is found on that device by what it measures — a
+`temperature` device class, or a unit of °C — and only created if it exists
+when the entry sets up.
 
 **Windows (HASS.Agent).** Run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
 on the machine. It makes its readings available over WMI. Then add a *WMI
@@ -221,9 +225,9 @@ own window shows the exact name. Windows' built-in
 `MSAcpi_ThermalZoneTemperature` class is not a substitute: on most boards it
 reports an ACPI zone, not the CPU, and often a constant.
 
-**NixOS rigs.** Have the rig agent in the companion flake publish the package
-temperature as a sensor on its MQTT device, as it does for its state. That
-change belongs to the flake, not to this repository.
+**NixOS rigs.** The rig agent in the companion flake publishes the package
+temperature itself, read from hwmon by label (`Package id 0` on Intel,
+`Tctl`/`Tdie` on AMD).
 
 ## Requirements on the miner
 

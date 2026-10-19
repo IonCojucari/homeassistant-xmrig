@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant, callback
@@ -369,6 +370,28 @@ def async_probe(
     return power
 
 
+def _machine_sensor(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None,
+    mac: str | None,
+    match: Callable[[er.RegistryEntry], bool],
+) -> str | None:
+    """The first sensor on the machine's MQTT device that `match` accepts."""
+    device = _find_device(hass, worker_id, device_id, mac)
+    if device is None:
+        return None
+    registry = er.async_get(hass)
+    return next(
+        (
+            entry.entity_id
+            for entry in er.async_entries_for_device(registry, device.id)
+            if entry.domain == "sensor" and match(entry)
+        ),
+        None,
+    )
+
+
 @callback
 def async_state_entity(
     hass: HomeAssistant,
@@ -377,16 +400,36 @@ def async_state_entity(
     mac: str | None = None,
 ) -> str | None:
     """The entity_id of the state entity the machine publishes, if it has one."""
-    device = _find_device(hass, worker_id, device_id, mac)
-    if device is None:
-        return None
-    registry = er.async_get(hass)
-    for entry in er.async_entries_for_device(registry, device.id):
-        if entry.domain == "sensor" and "state" in (
-            f"{entry.unique_id or ''} {entry.entity_id}".lower()
-        ):
-            return entry.entity_id
-    return None
+    return _machine_sensor(
+        hass,
+        worker_id,
+        device_id,
+        mac,
+        lambda entry: "state" in f"{entry.unique_id or ''} {entry.entity_id}".lower(),
+    )
+
+
+@callback
+def async_temperature_entity(
+    hass: HomeAssistant,
+    worker_id: str | None,
+    device_id: str | None = None,
+    mac: str | None = None,
+) -> str | None:
+    """The entity_id of the CPU temperature the machine publishes, if any.
+
+    Recognised by what it measures rather than by its name: the rig agent
+    declares a temperature device class, while a HASS.Agent WMI sensor has no
+    device class at all and only says °C.
+    """
+    return _machine_sensor(
+        hass,
+        worker_id,
+        device_id,
+        mac,
+        lambda entry: entry.original_device_class == "temperature"
+        or entry.unit_of_measurement == "°C",
+    )
 
 
 @callback

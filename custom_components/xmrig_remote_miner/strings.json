@@ -83,6 +83,9 @@
       },
       "memory_total": {
         "name": "Total RAM"
+      },
+      "cpu_temperature": {
+        "name": "CPU temperature"
       }
     },
     "button": {
