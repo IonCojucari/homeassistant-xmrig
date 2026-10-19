@@ -61,15 +61,22 @@ Nanopool = xmr-eu1.nanopool.org:14433
 MoneroOcean = gulf.moneroocean.stream:20128
 ```
 
-The label before `=` is optional; without one, the address is the label. Fewer
-than two lines means there is nothing to choose between, and no select entity
+The label before `=` is optional; without one, the address is the label. Each
+label has to be unique, since the select offers pools by name. Fewer than two
+lines means there is nothing to choose between, and no select entity
 is created — a control with a single option is a control that cannot control
 anything.
 
 Picking one reads the miner's live configuration, replaces the first pool's
 address, and pushes it back through the API's `/2/config` endpoint. Everything
 else XMRig was told is carried over untouched — the wallet, the worker name,
-the TLS flag, any further pools, which are its failover targets. The switch
+any further pools, which are its failover targets.
+
+TLS belongs to the pool, not to the rig, so it follows the address you pick.
+Write the scheme when the pools differ — `stratum+ssl://host:443` turns TLS on,
+`stratum+tcp://host:3333` turns it off — and a bare `host:port` keeps whatever
+the rig was using. A pinned `tls-fingerprint` is dropped when the host changes,
+since it names one server's certificate. The switch
 costs a stratum reconnect, not a restart: the RandomX dataset is not rebuilt
 for a move between pools on the same chain, so the hashing never stops.
 

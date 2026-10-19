@@ -47,6 +47,10 @@ _LOGGER = logging.getLogger(__name__)
 
 _MAC_RE = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", re.IGNORECASE)
 
+# Entity ids and unique_ids split into words on everything but letters and
+# digits: `button.wolf_rig_sleep` and `rig-wolf-rig-sleep` both yield "sleep".
+_WORD_SPLIT = re.compile(r"[^a-z0-9]+")
+
 # The command entities are `button`s in current agents and `switch`es in older
 # HASS.Agent versions. Both are accepted, because an integration that only
 # accepts today's form fails exactly like a command that was never created --
@@ -303,12 +307,15 @@ def _find_commands(hass: HomeAssistant, device_id: str) -> dict[str, Command]:
             entity_id=entry.entity_id,
             disabled=entry.disabled_by is not None,
         )
-        haystack = f"{entry.unique_id or ''} {entry.entity_id}".lower()
-        if any(key in haystack for key in POWER_SHUTDOWN_KEYS):
+        # Whole words, not substrings: HASS.Agent's MonitorSleep command is
+        # `..._monitorsleep`, and taking it for Sleep would give a Suspend
+        # button that turns the screen off and leaves the rig running.
+        words = set(_WORD_SPLIT.split(f"{entry.unique_id or ''} {entry.entity_id}".lower()))
+        if words.intersection(POWER_SHUTDOWN_KEYS):
             found.setdefault(ACTION_OFF, command)
-        elif any(key in haystack for key in POWER_REBOOT_KEYS):
+        elif words.intersection(POWER_REBOOT_KEYS):
             found.setdefault(ACTION_REBOOT, command)
-        elif any(key in haystack for key in POWER_SUSPEND_KEYS):
+        elif words.intersection(POWER_SUSPEND_KEYS):
             found.setdefault(ACTION_SUSPEND, command)
 
     if disabled := sorted(c.entity_id for c in found.values() if c.disabled):

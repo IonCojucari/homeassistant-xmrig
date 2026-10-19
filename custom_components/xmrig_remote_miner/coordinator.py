@@ -33,7 +33,7 @@ from .const import (
     POOL_SWITCH_SETTLE,
     MANUFACTURER,
 )
-from .pools import normalize as normalize_pool
+from .pools import normalize as normalize_pool, scheme as pool_scheme
 from .mqtt_power import (
     MqttPower,
     PowerCapabilities,
@@ -286,13 +286,7 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         button with nothing, and only while the machine was off would anyone
         find out.
         """
-        known = self.power_capabilities
-        return async_probe(
-            self.hass,
-            self.worker_id,
-            self.mqtt_device,
-            self._configured_mac or (known.mac if known else None),
-        )
+        return async_probe(self.hass, self.worker_id, *self._lookup)
 
     async def async_probe_power(self) -> None:
         """Ask the machine's MQTT device once what it permits.
@@ -380,13 +374,17 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         machine executing its own shutdown is what makes that true -- no session
         is being cut from under us.
 
-        The probe is retried when nothing was found at start-up. The buttons are
-        built from the capabilities remembered in the config entry, so they
-        exist while the machine is off; the entities to press are looked up
-        live, and at start-up they may simply not have been there yet.
+        The entities to press are looked up again on every press, which is two
+        registry reads. The buttons are built from the capabilities remembered
+        in the config entry, so they exist while the machine is off, but what
+        they press may have changed since start-up: not published yet, renamed,
+        or re-enabled after a press that said it was disabled. A lookup that
+        does not find this action -- the MQTT integration still replaying
+        discovery, say -- leaves the previous one standing.
         """
-        if self._power is None:
-            self._power = self._probe_power()
+        power = self._probe_power()
+        if power is not None and (self._power is None or action in power.entities):
+            self._power = power
         if self._power is None:
             raise HomeAssistantError(
                 f"no MQTT device found right now for {self.host}"
@@ -435,11 +433,13 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
         status, payload = await self._async_raw_request(
             "GET", "/2/config", what="reading the config"
         )
-        if status in (401, 403):
+        if status == 401:
             raise HomeAssistantError(
                 "XMRig refused the access token when reading its config"
             )
-        if status == 404:
+        # 403 is what XMRig answers a restricted API, which is the usual case;
+        # 404 is kept for builds that do not serve the endpoint at all.
+        if status in (403, 404):
             raise HomeAssistantError(
                 "This XMRig does not serve /2/config — it is running with"
                 " http.restricted enabled, so its pool cannot be changed"
@@ -462,9 +462,9 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
 
         The config is read back and edited rather than composed here, because
         it holds things this integration has no business inventing -- the
-        wallet, the worker name, the TLS flag, the access token itself. Only
-        the first pool's address changes; any further pools, which would be
-        failover targets, are left where they are.
+        wallet, the worker name, the access token itself. Only the first pool's
+        address changes, with the TLS settings that belong to it; any further
+        pools, which would be failover targets, are left where they are.
 
         XMRig applies this by reloading its config, which drops the stratum
         connection and redials. The RandomX dataset is not rebuilt for a move
@@ -480,9 +480,19 @@ class XmrigCoordinator(DataUpdateCoordinator[dict]):
             )
 
         primary = dict(pools[0])
-        if normalize_pool(primary.get("url") or "") == normalize_pool(url):
+        old = normalize_pool(primary.get("url") or "")
+        if old == normalize_pool(url):
             return
         primary["url"] = url
+        # The old pool's transport would otherwise ride along to the new one.
+        # A scheme in the configured URL says which it wants -- XMRig ORs the
+        # `tls` flag with an ssl scheme, so a stale `true` would force TLS onto
+        # a plain stratum port. A bare host:port says nothing, and keeps it.
+        if (scheme := pool_scheme(url)) is not None:
+            primary["tls"] = scheme in ("stratum+ssl", "stratum+tls", "ssl", "tls")
+        # A fingerprint pins one server's certificate: never another host's.
+        if old.rsplit(":", 1)[0] != normalize_pool(url).rsplit(":", 1)[0]:
+            primary.pop("tls-fingerprint", None)
         config["pools"] = [primary, *pools[1:]]
 
         status, _ = await self._async_raw_request(

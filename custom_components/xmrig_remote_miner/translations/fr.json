@@ -33,7 +33,8 @@
       "cannot_connect": "Connexion impossible à cette adresse.",
       "invalid_auth": "Jeton d'accès refusé.",
       "invalid_pools": "Chaque ligne doit être une adresse hôte:port, éventuellement écrite « Libellé = hôte:port ».",
-      "duplicate_pools": "Le même pool est indiqué deux fois."
+      "duplicate_pools": "Le même pool est indiqué deux fois.",
+      "duplicate_pool_labels": "Deux pools portent le même nom ; donnez un nom différent à chacun."
     },
     "abort": {
       "already_configured": "Ce rig est déjà configuré.",

@@ -26,6 +26,12 @@ from dataclasses import dataclass
 _SCHEME = re.compile(r"^[a-z0-9+.\-]+://", re.IGNORECASE)
 
 
+def scheme(url: str) -> str | None:
+    """The URL's scheme, lowercased, or None for a bare host:port."""
+    match = _SCHEME.match(url.strip())
+    return match.group(0)[:-3].lower() if match else None
+
+
 def normalize(url: str) -> str:
     """A pool address reduced to what identifies it: host and port."""
     return _SCHEME.sub("", url.strip()).rstrip("/").lower()
