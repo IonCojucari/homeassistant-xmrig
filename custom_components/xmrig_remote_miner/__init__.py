@@ -10,11 +10,17 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers.typing import ConfigType
 
 from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS, DOMAIN
 from .coordinator import XmrigCoordinator
-from .fleet import async_register_rig, is_fleet
+from .fleet import (
+    async_register_rig,
+    async_setup_fleet,
+    async_setup_rediscovery,
+    is_fleet,
+)
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
@@ -23,8 +29,11 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
-# The fleet entry only has totals and buttons acting on every rig.
-FLEET_PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR]
+# The fleet entry: totals, buttons acting on every rig, a switch per rig.
+FLEET_PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
+
+# Set up through the UI only; nothing to read from configuration.yaml.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 type XmrigConfigEntry = ConfigEntry[XmrigCoordinator]
 
@@ -35,6 +44,12 @@ _OBSOLETE_KEYS = {
     1: ("ssh_user", "ssh_port", "ssh_key"),
     2: ("glances_port", "glances_user", "glances_password"),
 }
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Integration-wide: offer the fleet again if its entry is removed."""
+    async_setup_rediscovery(hass)
+    return True
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -99,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> boo
     The fleet entry is the exception: it is not a rig, and has nothing to poll.
     """
     if is_fleet(entry):
+        async_setup_fleet(hass, entry)
         await hass.config_entries.async_forward_entry_setups(entry, FLEET_PLATFORMS)
         return True
 

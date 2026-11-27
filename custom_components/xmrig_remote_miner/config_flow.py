@@ -209,6 +209,9 @@ class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         await self.async_set_unique_id(FLEET_UNIQUE_ID)
         self._abort_if_unique_id_configured()
+        # Names the discovered card, which would otherwise show only the
+        # integration's name and look like one more rig.
+        self.context["title_placeholders"] = {"name": FLEET_TITLE}
         return await self.async_step_fleet_confirm()
 
     async def async_step_fleet_confirm(

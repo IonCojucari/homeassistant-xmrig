@@ -17,20 +17,14 @@ from typing import Any
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import XmrigConfigEntry
 from .coordinator import XmrigCoordinator
-from .fleet import (
-    SIGNAL_FLEET_UPDATED,
-    async_command_all,
-    fleet_device_info,
-    is_fleet,
-    rigs,
-)
+from .const import STATE_LOST, STATE_OFF
+from .fleet import FleetEntity, Rig, async_command_all, is_fleet
 from .mqtt_power import send_magic_packet
 
 _LOGGER = logging.getLogger(__name__)
@@ -166,37 +160,30 @@ class XmrigButton(ButtonEntity):
         await self.entity_description.press_fn(self.coordinator)
 
 
-class XmrigFleetButton(ButtonEntity):
+class XmrigFleetButton(FleetEntity, ButtonEntity):
     """Pause or resume the miner on every rig at once.
 
     Pauses XMRig, like each rig's switch, rather than the machines: the
     processes stay alive with their RandomX datasets, so resuming is instant.
-    Rigs that are not answering are skipped -- see fleet.async_command_all.
+    See fleet.async_command_all for which rigs are tried.
     """
-
-    _attr_has_entity_name = True
-    _attr_should_poll = False
 
     def __init__(
         self, entry: XmrigConfigEntry, key: str, method: str, icon: str
     ) -> None:
+        super().__init__(entry, key)
         self._method = method
         self._attr_translation_key = key
         self._attr_icon = icon
-        self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_device_info = fleet_device_info(entry)
 
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass, SIGNAL_FLEET_UPDATED, self.async_write_ha_state
-            )
+    @callback
+    def _update(self, rigs: list[Rig]) -> None:
+        # Unavailable only with nothing to command: no rig loaded, or every
+        # machine saying it is off.
+        self._attr_available = any(
+            rig.coordinator is not None and rig.status not in (STATE_OFF, STATE_LOST)
+            for rig in rigs
         )
-
-    @property
-    def available(self) -> bool:
-        """Pressable while at least one rig is answering, and only then."""
-        return any(c.last_update_success for c in rigs(self.hass).values())
 
     async def async_press(self) -> None:
         await async_command_all(self.hass, self._method)

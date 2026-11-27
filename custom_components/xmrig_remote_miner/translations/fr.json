@@ -1,5 +1,6 @@
 {
   "config": {
+    "flow_title": "{name}",
     "step": {
       "user": {
         "title": "Ajouter un rig XMRig",
@@ -95,6 +96,15 @@
       },
       "fleet_hashrate": {
         "name": "Hashrate total"
+      },
+      "fleet_miners": {
+        "name": "Mineurs"
+      },
+      "fleet_miners_mining": {
+        "name": "Mineurs actifs"
+      },
+      "fleet_shares_good": {
+        "name": "Parts acceptées"
       }
     },
     "button": {

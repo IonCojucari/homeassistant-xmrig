@@ -20,7 +20,6 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_entity_registry_updated_event,
@@ -32,7 +31,7 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 from . import XmrigConfigEntry
 from .const import STATE_LOST, STATE_MINING, STATE_OFF, STATE_PAUSED
 from .coordinator import XmrigCoordinator, miner_memory_total, miner_os
-from .fleet import SIGNAL_FLEET_UPDATED, fleet_device_info, is_fleet, rigs
+from .fleet import FleetEntity, Rig, is_fleet
 
 
 def _hashrate_khs(data: dict) -> float | None:
@@ -249,7 +248,14 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     if is_fleet(entry):
-        async_add_entities([XmrigFleetHashrateSensor(entry)])
+        async_add_entities(
+            [
+                XmrigFleetHashrateSensor(entry),
+                XmrigFleetMinersSensor(entry),
+                XmrigFleetMiningSensor(entry),
+                XmrigFleetSharesSensor(entry),
+            ]
+        )
         return
 
     coordinator = entry.runtime_data
@@ -431,7 +437,7 @@ class XmrigTemperatureSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
         return value
 
 
-class XmrigFleetHashrateSensor(SensorEntity):
+class XmrigFleetHashrateSensor(FleetEntity, SensorEntity):
     """The hashrate of every rig together, in the same kH/s as each of them.
 
     Only rigs that answered their last poll count. One that does not answer is
@@ -442,12 +448,9 @@ class XmrigFleetHashrateSensor(SensorEntity):
     So a rig that is off adds zero rather than making the total unavailable:
     "the fleet is doing 4.1 kH/s with one rig down" is the true statement, and
     the one a solar-following automation needs. How many rigs that number
-    covers is in the attributes. The sensor is only unavailable with no rig
-    loaded at all, when there is nothing to add up.
+    covers is in the attributes.
     """
 
-    _attr_has_entity_name = True
-    _attr_should_poll = False
     _attr_translation_key = "fleet_hashrate"
     _attr_native_unit_of_measurement = "kH/s"
     _attr_suggested_display_precision = 2
@@ -455,38 +458,90 @@ class XmrigFleetHashrateSensor(SensorEntity):
     _attr_icon = "mdi:speedometer"
 
     def __init__(self, entry: XmrigConfigEntry) -> None:
-        self._attr_unique_id = f"{entry.entry_id}_hashrate_khs"
-        self._attr_device_info = fleet_device_info(entry)
+        super().__init__(entry, "hashrate_khs")
 
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass, SIGNAL_FLEET_UPDATED, self.async_write_ha_state
-            )
+    @callback
+    def _update(self, rigs: list[Rig]) -> None:
+        answering = [rig for rig in rigs if rig.answering]
+        # XMRig reports a zero hashrate as null: a paused rig, or one that has
+        # just started. It answered, so it counts, at zero.
+        self._attr_native_value = round(
+            sum((_hashrate_khs(rig.summary) or 0.0 for rig in answering), 0.0), 2
         )
-
-    @property
-    def _reporting(self) -> list[float]:
-        return [
-            value
-            for c in rigs(self.hass).values()
-            if c.last_update_success
-            and (value := _hashrate_khs(c.miner)) is not None
-        ]
-
-    @property
-    def available(self) -> bool:
-        return bool(rigs(self.hass))
-
-    @property
-    def native_value(self) -> float | None:
-        if not rigs(self.hass):
-            return None
-        return round(sum(self._reporting, 0.0), 2)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, int]:
-        return {
-            "rigs_total": len(rigs(self.hass)),
-            "rigs_reporting": len(self._reporting),
+        self._attr_extra_state_attributes = {
+            "rigs_total": len(rigs),
+            "rigs_reporting": len(answering),
         }
+
+
+class XmrigFleetMinersSensor(FleetEntity, SensorEntity):
+    """How many rigs there are, with their names and what each is doing.
+
+    The names are attributes rather than the state: a state is capped at 255
+    characters and is meant to be a value, not a list.
+    """
+
+    _attr_translation_key = "fleet_miners"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:server"
+
+    def __init__(self, entry: XmrigConfigEntry) -> None:
+        super().__init__(entry, "miners")
+
+    @callback
+    def _update(self, rigs: list[Rig]) -> None:
+        self._attr_native_value = len(rigs)
+        self._attr_extra_state_attributes = {
+            "names": [rig.name for rig in rigs],
+            "mining": [rig.name for rig in rigs if rig.status == STATE_MINING],
+            "paused": [rig.name for rig in rigs if rig.status == STATE_PAUSED],
+            "down": [
+                rig.name
+                for rig in rigs
+                if rig.status not in (STATE_MINING, STATE_PAUSED)
+            ],
+            "status": {rig.name: rig.status for rig in rigs},
+        }
+
+
+class XmrigFleetMiningSensor(FleetEntity, SensorEntity):
+    """How many rigs are mining right now: answering and not paused."""
+
+    _attr_translation_key = "fleet_miners_mining"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:pickaxe"
+
+    def __init__(self, entry: XmrigConfigEntry) -> None:
+        super().__init__(entry, "miners_mining")
+
+    @callback
+    def _update(self, rigs: list[Rig]) -> None:
+        self._attr_native_value = sum(rig.status == STATE_MINING for rig in rigs)
+
+
+class XmrigFleetSharesSensor(FleetEntity, SensorEntity):
+    """Accepted shares, added up over every rig's current counter.
+
+    A rig that stops answering keeps its last count in the sum: shares already
+    accepted do not become unaccepted when a machine goes off.
+
+    No state class, on purpose. Each rig's counter restarts from zero with its
+    XMRig process, so the sum can go down when one rig restarts. Declared as an
+    increasing total, Home Assistant would read that drop as the whole meter
+    resetting and count everything after it as new shares. The per-rig sensors
+    carry the long-term statistics, each with its own resets handled.
+    """
+
+    _attr_translation_key = "fleet_shares_good"
+    _attr_icon = "mdi:check-decagram"
+
+    def __init__(self, entry: XmrigConfigEntry) -> None:
+        super().__init__(entry, "shares_good")
+
+    @callback
+    def _update(self, rigs: list[Rig]) -> None:
+        counts = [
+            count for rig in rigs if (count := _shares_good(rig.summary)) is not None
+        ]
+        self._attr_native_value = sum(counts)
+        self._attr_extra_state_attributes = {"rigs_counted": len(counts)}

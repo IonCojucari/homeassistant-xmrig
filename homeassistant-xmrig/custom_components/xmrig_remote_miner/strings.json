@@ -1,0 +1,136 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Add an XMRig rig",
+        "description": "Enter the address and HTTP access token of the XMRig instance (the miner's http.access-token option). List two or more pools to get a selector for switching between them.",
+        "data": {
+          "name": "Name",
+          "host": "IP address or host",
+          "port": "API port",
+          "token": "Access token",
+          "scan_interval": "Poll interval (seconds)",
+          "mac": "MAC address (blank = read from the MQTT device)",
+          "pools": "Pools to choose between (one per line)",
+          "mqtt_device": "MQTT device (blank = auto-detect)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure rig",
+        "description": "Change this rig's address, credentials or poll interval. The entry is kept, so the entities and their history survive — unlike removing and re-adding it.",
+        "data": {
+          "host": "IP address or host",
+          "port": "API port",
+          "token": "Access token",
+          "scan_interval": "Poll interval (seconds)",
+          "mac": "MAC address (blank = read from the MQTT device)",
+          "pools": "Pools to choose between (one per line)",
+          "mqtt_device": "MQTT device (blank = auto-detect)"
+        }
+      },
+      "fleet_confirm": {
+        "title": "XMRig fleet",
+        "description": "Add a fleet device carrying the total hashrate of every rig and buttons to pause or resume all of them at once."
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to that address.",
+      "invalid_auth": "Access token rejected.",
+      "invalid_pools": "Each pool line must be a host:port address, optionally written as \"Label = host:port\".",
+      "duplicate_pools": "The same pool is listed twice.",
+      "duplicate_pool_labels": "Two pools have the same label; give each one its own name."
+    },
+    "abort": {
+      "already_configured": "This rig is already configured.",
+      "reconfigure_successful": "Rig reconfigured.",
+      "fleet_not_reconfigurable": "The fleet has nothing to configure: it follows every rig added to this integration."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "State",
+        "state": {
+          "mining": "Mining",
+          "paused": "Paused",
+          "off": "Off",
+          "lost": "Lost"
+        }
+      },
+      "hashrate_khs": {
+        "name": "Hashrate (kH/s)"
+      },
+      "hashrate_max": {
+        "name": "Max hashrate"
+      },
+      "shares_good": {
+        "name": "Accepted shares"
+      },
+      "shares_rejected": {
+        "name": "Rejected shares"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "pool": {
+        "name": "Pool"
+      },
+      "ping": {
+        "name": "Pool ping"
+      },
+      "memory_usage": {
+        "name": "Memory used"
+      },
+      "load": {
+        "name": "System load"
+      },
+      "os": {
+        "name": "Operating system"
+      },
+      "memory_total": {
+        "name": "Total RAM"
+      },
+      "cpu_temperature": {
+        "name": "CPU temperature"
+      },
+      "fleet_hashrate": {
+        "name": "Total hashrate"
+      },
+      "fleet_miners": {
+        "name": "Miners"
+      },
+      "fleet_miners_mining": {
+        "name": "Miners mining"
+      },
+      "fleet_shares_good": {
+        "name": "Accepted shares"
+      }
+    },
+    "button": {
+      "shutdown": {
+        "name": "Shut down"
+      },
+      "reboot": {
+        "name": "Reboot"
+      },
+      "suspend": {
+        "name": "Suspend"
+      },
+      "wake": {
+        "name": "Wake"
+      },
+      "pause_all": {
+        "name": "Pause all"
+      },
+      "resume_all": {
+        "name": "Resume all"
+      }
+    },
+    "select": {
+      "pool": {
+        "name": "Pool"
+      }
+    }
+  }
+}
