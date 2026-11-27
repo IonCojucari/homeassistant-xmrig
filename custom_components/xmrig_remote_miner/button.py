@@ -17,12 +17,14 @@ from typing import Any
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import XmrigConfigEntry
 from .coordinator import XmrigCoordinator
+from .const import STATE_LOST, STATE_OFF
+from .fleet import FleetEntity, Rig, async_command_all, is_fleet
 from .mqtt_power import send_magic_packet
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,6 +103,16 @@ async def async_setup_entry(
     entry: XmrigConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
+    if is_fleet(entry):
+        async_add_entities(
+            XmrigFleetButton(entry, key, method, icon)
+            for key, method, icon in (
+                ("pause_all", "pause", "mdi:pause-circle"),
+                ("resume_all", "resume", "mdi:play-circle"),
+            )
+        )
+        return
+
     coordinator = entry.runtime_data
     caps = coordinator.power_capabilities
     if caps is None:
@@ -146,3 +158,32 @@ class XmrigButton(ButtonEntity):
 
     async def async_press(self) -> None:
         await self.entity_description.press_fn(self.coordinator)
+
+
+class XmrigFleetButton(FleetEntity, ButtonEntity):
+    """Pause or resume the miner on every rig at once.
+
+    Pauses XMRig, like each rig's switch, rather than the machines: the
+    processes stay alive with their RandomX datasets, so resuming is instant.
+    See fleet.async_command_all for which rigs are tried.
+    """
+
+    def __init__(
+        self, entry: XmrigConfigEntry, key: str, method: str, icon: str
+    ) -> None:
+        super().__init__(entry, key)
+        self._method = method
+        self._attr_translation_key = key
+        self._attr_icon = icon
+
+    @callback
+    def _update(self, rigs: list[Rig]) -> None:
+        # Unavailable only with nothing to command: no rig loaded, or every
+        # machine saying it is off.
+        self._attr_available = any(
+            rig.coordinator is not None and rig.status not in (STATE_OFF, STATE_LOST)
+            for rig in rigs
+        )
+
+    async def async_press(self) -> None:
+        await async_command_all(self.hass, self._method)

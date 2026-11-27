@@ -1,0 +1,136 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Ajouter un rig XMRig",
+        "description": "Renseignez l'adresse et le jeton d'accès HTTP de l'instance XMRig (option http.access-token du mineur). Indiquez au moins deux pools pour obtenir un sélecteur permettant de passer de l'un à l'autre.",
+        "data": {
+          "name": "Nom",
+          "host": "Adresse IP ou hôte",
+          "port": "Port de l'API",
+          "token": "Jeton d'accès",
+          "scan_interval": "Intervalle de relevé (secondes)",
+          "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
+          "pools": "Pools au choix (un par ligne)",
+          "mqtt_device": "Appareil MQTT (vide = détection automatique)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigurer le rig",
+        "description": "Modifiez l'adresse, les identifiants ou l'intervalle de relevé de ce rig. L'entrée est conservée, donc les entités et leur historique aussi — contrairement à une suppression suivie d'un nouvel ajout.",
+        "data": {
+          "host": "Adresse IP ou hôte",
+          "port": "Port de l'API",
+          "token": "Jeton d'accès",
+          "scan_interval": "Intervalle de relevé (secondes)",
+          "mac": "Adresse MAC (vide = lue sur l'appareil MQTT)",
+          "pools": "Pools au choix (un par ligne)",
+          "mqtt_device": "Appareil MQTT (vide = détection automatique)"
+        }
+      },
+      "fleet_confirm": {
+        "title": "Parc XMRig",
+        "description": "Ajouter un appareil « parc » portant le hashrate total de tous les rigs et des boutons pour tous les mettre en pause ou les relancer d'un coup."
+      }
+    },
+    "error": {
+      "cannot_connect": "Connexion impossible à cette adresse.",
+      "invalid_auth": "Jeton d'accès refusé.",
+      "invalid_pools": "Chaque ligne doit être une adresse hôte:port, éventuellement écrite « Libellé = hôte:port ».",
+      "duplicate_pools": "Le même pool est indiqué deux fois.",
+      "duplicate_pool_labels": "Deux pools portent le même nom ; donnez un nom différent à chacun."
+    },
+    "abort": {
+      "already_configured": "Ce rig est déjà configuré.",
+      "reconfigure_successful": "Rig reconfiguré.",
+      "fleet_not_reconfigurable": "Le parc n'a rien à configurer : il suit tous les rigs ajoutés à cette intégration."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "État",
+        "state": {
+          "mining": "En minage",
+          "paused": "En pause",
+          "off": "Éteint",
+          "lost": "Injoignable"
+        }
+      },
+      "hashrate_khs": {
+        "name": "Hashrate (kH/s)"
+      },
+      "hashrate_max": {
+        "name": "Hashrate max"
+      },
+      "shares_good": {
+        "name": "Parts acceptées"
+      },
+      "shares_rejected": {
+        "name": "Parts rejetées"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "pool": {
+        "name": "Pool"
+      },
+      "ping": {
+        "name": "Ping pool"
+      },
+      "memory_usage": {
+        "name": "Mémoire utilisée"
+      },
+      "load": {
+        "name": "Charge système"
+      },
+      "os": {
+        "name": "Système"
+      },
+      "memory_total": {
+        "name": "RAM totale"
+      },
+      "cpu_temperature": {
+        "name": "Température CPU"
+      },
+      "fleet_hashrate": {
+        "name": "Hashrate total"
+      },
+      "fleet_miners": {
+        "name": "Mineurs"
+      },
+      "fleet_miners_mining": {
+        "name": "Mineurs actifs"
+      },
+      "fleet_shares_good": {
+        "name": "Parts acceptées"
+      }
+    },
+    "button": {
+      "shutdown": {
+        "name": "Éteindre"
+      },
+      "reboot": {
+        "name": "Redémarrer"
+      },
+      "suspend": {
+        "name": "Mettre en veille"
+      },
+      "wake": {
+        "name": "Démarrer"
+      },
+      "pause_all": {
+        "name": "Tout mettre en pause"
+      },
+      "resume_all": {
+        "name": "Tout relancer"
+      }
+    },
+    "select": {
+      "pool": {
+        "name": "Pool"
+      }
+    }
+  }
+}

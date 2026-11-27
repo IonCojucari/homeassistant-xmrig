@@ -50,6 +50,39 @@ Plus host power buttons, when the machine supports them.
 The switch pauses the *miner*, which is not the same as powering the machine —
 that is what the buttons below are for.
 
+## The fleet
+
+Every rig is its own entry, so the totals across them live in one more: the
+*XMRig fleet*. It is offered as a discovered card under *Settings → Devices &
+Services* as soon as the first rig is set up — one click to add it, or ignore
+it. Deleting it, or un-ignoring it, brings the card back. It has nothing to
+configure; it follows every rig in the integration, including ones added later.
+
+| Entity | Notes |
+|---|---|
+| `sensor.xmrig_fleet_total_hashrate` | kH/s, the sum over rigs that answered their last poll. Attributes `rigs_total` and `rigs_reporting`. |
+| `sensor.xmrig_fleet_miners` | number of rigs. Attributes: `names`, then `mining`, `paused` and `down` (lists of names), and `status` (name → `mining` / `paused` / `off` / `lost` / `not_answering`). |
+| `sensor.xmrig_fleet_miners_mining` | how many rigs are mining right now |
+| `sensor.xmrig_fleet_accepted_shares` | accepted shares, summed over every rig's current counter |
+| `button.xmrig_fleet_pause_all` | pauses XMRig on every rig, like each rig's switch |
+| `button.xmrig_fleet_resume_all` | resumes it on every rig |
+| `switch.xmrig_fleet_<rig>` | one per rig: the same run/pause switch as on the rig's own device, gathered on the fleet device so the whole fleet runs from one panel |
+
+A rig counts as soon as it is set up, even while it is off or retrying its
+setup: it adds nothing to the hashrate, appears under `down`, and its switch is
+unavailable. While a rig is being reloaded, the fleet keeps showing its last
+figures rather than dipping for a few seconds; just after a restart it shows
+*unknown* until every rig has had its first try.
+
+The buttons try every rig except those whose machine has said it is off (or
+dropped off MQTT without a goodbye) — a rig whose last poll merely failed may
+still be mining, so it is tried too. One rig refusing does not stop the rest,
+and the press then names every rig it could not reach.
+
+Accepted shares carry no state class on purpose: one rig restarting resets its
+own counter, which a summed "increasing total" would misread as the whole fleet
+resetting. The per-rig share sensors keep the long-term statistics.
+
 ## Changing the pool
 
 List the pools you want to be able to choose between in the config flow, one
