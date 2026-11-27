@@ -50,6 +50,26 @@ Plus host power buttons, when the machine supports them.
 The switch pauses the *miner*, which is not the same as powering the machine —
 that is what the buttons below are for.
 
+## The fleet
+
+Every rig is its own entry, so the totals across them live in one more: the
+*XMRig fleet*. It is offered as a discovered card under *Settings → Devices &
+Services* as soon as the first rig is set up — one click to add it, or ignore
+it for good. It has nothing to configure; it follows every rig in the
+integration, including ones added later.
+
+| Entity | Notes |
+|---|---|
+| `sensor.xmrig_fleet_total_hashrate` | kH/s, the sum of every rig's hashrate. Attributes `rigs_total` and `rigs_reporting` say how many rigs that covers. |
+| `button.xmrig_fleet_pause_all` | pauses XMRig on every rig, like each rig's switch |
+| `button.xmrig_fleet_resume_all` | resumes it on every rig |
+
+Only rigs that answered their last poll count. One that is off or unreachable
+adds nothing to the total rather than making it unavailable — the fleet really
+is hashing at the remaining rate — and the buttons skip it instead of waiting
+out its connection timeout. If some rigs refuse the command, the others are
+still paused or resumed, and the press reports which ones did not follow.
+
 ## Changing the pool
 
 List the pools you want to be able to choose between in the config flow, one

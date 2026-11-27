@@ -31,6 +31,14 @@ POOL_SWITCH_SETTLE = 3
 # CONF_NAME, CONF_HOST, CONF_PORT, CONF_TOKEN, CONF_SCAN_INTERVAL).
 MANUFACTURER = "XMRig"
 
+# --- The fleet ------------------------------------------------------------------
+#
+# The one entry that is not a rig: it carries the totals across all of them.
+# Its unique_id is what tells it apart, and cannot collide with a rig's, which
+# is always "host:port". See fleet.py.
+FLEET_UNIQUE_ID = "fleet"
+FLEET_TITLE = "XMRig fleet"
+
 # --- Host machine power control (optional) ------------------------------------
 #
 # One mechanism, and only one: find the machine's MQTT device and press the

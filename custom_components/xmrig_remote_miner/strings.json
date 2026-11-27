@@ -27,6 +27,10 @@
           "pools": "Pools to choose between (one per line)",
           "mqtt_device": "MQTT device (blank = auto-detect)"
         }
+      },
+      "fleet_confirm": {
+        "title": "XMRig fleet",
+        "description": "Add a fleet device carrying the total hashrate of every rig and buttons to pause or resume all of them at once."
       }
     },
     "error": {
@@ -38,7 +42,8 @@
     },
     "abort": {
       "already_configured": "This rig is already configured.",
-      "reconfigure_successful": "Rig reconfigured."
+      "reconfigure_successful": "Rig reconfigured.",
+      "fleet_not_reconfigurable": "The fleet has nothing to configure: it follows every rig added to this integration."
     }
   },
   "entity": {
@@ -87,6 +92,9 @@
       },
       "cpu_temperature": {
         "name": "CPU temperature"
+      },
+      "fleet_hashrate": {
+        "name": "Total hashrate"
       }
     },
     "button": {
@@ -101,6 +109,12 @@
       },
       "wake": {
         "name": "Wake"
+      },
+      "pause_all": {
+        "name": "Pause all"
+      },
+      "resume_all": {
+        "name": "Resume all"
       }
     },
     "select": {

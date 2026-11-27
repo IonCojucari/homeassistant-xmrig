@@ -1,7 +1,8 @@
 """XMRig integration: monitoring and control of mining instances.
 
 One config entry = one rig, registered as a single device carrying all of its
-sensors and its run/pause switch.
+sensors and its run/pause switch. One more, optional entry is the fleet: the
+totals and controls across every rig (see fleet.py).
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CAPS_ACTIONS, CAPS_MAC, CONF_MQTT_DEVICE, CONF_POWER_CAPS, DOMAIN
 from .coordinator import XmrigCoordinator
+from .fleet import async_register_rig, is_fleet
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
@@ -20,6 +22,9 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
+
+# The fleet entry only has totals and buttons acting on every rig.
+FLEET_PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR]
 
 type XmrigConfigEntry = ConfigEntry[XmrigCoordinator]
 
@@ -90,7 +95,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> boo
     that very moment. So the entry loads degraded instead: the buttons exist, the
     sensors are unavailable, and the coordinator recovers on its own as soon as
     the miner answers.
+
+    The fleet entry is the exception: it is not a rig, and has nothing to poll.
     """
+    if is_fleet(entry):
+        await hass.config_entries.async_forward_entry_setups(entry, FLEET_PLATFORMS)
+        return True
+
     coordinator = XmrigCoordinator(hass, entry)
 
     if coordinator.power_capabilities is None:
@@ -108,6 +119,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> boo
         await coordinator.async_probe_power()
 
     entry.runtime_data = coordinator
+    async_register_rig(hass, entry, coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     if not coordinator.last_update_success:
@@ -150,5 +162,7 @@ def _async_reload_when_miner_returns(
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: XmrigConfigEntry) -> bool:
-    """Unload a rig."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Unload a rig, or the fleet."""
+    return await hass.config_entries.async_unload_platforms(
+        entry, FLEET_PLATFORMS if is_fleet(entry) else PLATFORMS
+    )

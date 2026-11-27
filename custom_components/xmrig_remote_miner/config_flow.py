@@ -26,6 +26,8 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FLEET_TITLE,
+    FLEET_UNIQUE_ID,
     MIN_SCAN_INTERVAL,
 )
 from .coordinator import async_request
@@ -196,6 +198,26 @@ class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_integration_discovery(
+        self, discovery_info: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Offer the fleet entry, started by the first rig that sets up.
+
+        The unique_id is what keeps this to a single card: a second rig setting
+        up while the first offer is pending aborts on the flow in progress, and
+        once the fleet exists -- or has been ignored -- on the entry.
+        """
+        await self.async_set_unique_id(FLEET_UNIQUE_ID)
+        self._abort_if_unique_id_configured()
+        return await self.async_step_fleet_confirm()
+
+    async def async_step_fleet_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title=FLEET_TITLE, data={})
+        return self.async_show_form(step_id="fleet_confirm")
+
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -210,6 +232,8 @@ class XmrigConfigFlow(ConfigFlow, domain=DOMAIN):
         address change would mostly add new ways to collide with another entry.
         """
         entry = self._get_reconfigure_entry()
+        if entry.unique_id == FLEET_UNIQUE_ID:
+            return self.async_abort(reason="fleet_not_reconfigurable")
         errors: dict[str, str] = {}
 
         if user_input is not None:

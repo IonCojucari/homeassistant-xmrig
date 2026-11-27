@@ -20,6 +20,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_entity_registry_updated_event,
@@ -31,6 +32,7 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 from . import XmrigConfigEntry
 from .const import STATE_LOST, STATE_MINING, STATE_OFF, STATE_PAUSED
 from .coordinator import XmrigCoordinator, miner_memory_total, miner_os
+from .fleet import SIGNAL_FLEET_UPDATED, fleet_device_info, is_fleet, rigs
 
 
 def _hashrate_khs(data: dict) -> float | None:
@@ -246,6 +248,10 @@ async def async_setup_entry(
     entry: XmrigConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
+    if is_fleet(entry):
+        async_add_entities([XmrigFleetHashrateSensor(entry)])
+        return
+
     coordinator = entry.runtime_data
     # No load sensor for a rig known to run Windows, which has no load average
     # to report: it would stay empty forever.
@@ -423,3 +429,64 @@ class XmrigTemperatureSensor(CoordinatorEntity[XmrigCoordinator], SensorEntity):
             except HomeAssistantError:
                 return None
         return value
+
+
+class XmrigFleetHashrateSensor(SensorEntity):
+    """The hashrate of every rig together, in the same kH/s as each of them.
+
+    Only rigs that answered their last poll count. One that does not answer is
+    not hashing for anyone that can be measured, and a coordinator keeps its
+    last good summary after a failed poll -- counting that would freeze a
+    stopped rig's last hashrate into the total.
+
+    So a rig that is off adds zero rather than making the total unavailable:
+    "the fleet is doing 4.1 kH/s with one rig down" is the true statement, and
+    the one a solar-following automation needs. How many rigs that number
+    covers is in the attributes. The sensor is only unavailable with no rig
+    loaded at all, when there is nothing to add up.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_translation_key = "fleet_hashrate"
+    _attr_native_unit_of_measurement = "kH/s"
+    _attr_suggested_display_precision = 2
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, entry: XmrigConfigEntry) -> None:
+        self._attr_unique_id = f"{entry.entry_id}_hashrate_khs"
+        self._attr_device_info = fleet_device_info(entry)
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_FLEET_UPDATED, self.async_write_ha_state
+            )
+        )
+
+    @property
+    def _reporting(self) -> list[float]:
+        return [
+            value
+            for c in rigs(self.hass).values()
+            if c.last_update_success
+            and (value := _hashrate_khs(c.miner)) is not None
+        ]
+
+    @property
+    def available(self) -> bool:
+        return bool(rigs(self.hass))
+
+    @property
+    def native_value(self) -> float | None:
+        if not rigs(self.hass):
+            return None
+        return round(sum(self._reporting, 0.0), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int]:
+        return {
+            "rigs_total": len(rigs(self.hass)),
+            "rigs_reporting": len(self._reporting),
+        }

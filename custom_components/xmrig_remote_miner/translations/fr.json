@@ -27,6 +27,10 @@
           "pools": "Pools au choix (un par ligne)",
           "mqtt_device": "Appareil MQTT (vide = détection automatique)"
         }
+      },
+      "fleet_confirm": {
+        "title": "Parc XMRig",
+        "description": "Ajouter un appareil « parc » portant le hashrate total de tous les rigs et des boutons pour tous les mettre en pause ou les relancer d'un coup."
       }
     },
     "error": {
@@ -38,7 +42,8 @@
     },
     "abort": {
       "already_configured": "Ce rig est déjà configuré.",
-      "reconfigure_successful": "Rig reconfiguré."
+      "reconfigure_successful": "Rig reconfiguré.",
+      "fleet_not_reconfigurable": "Le parc n'a rien à configurer : il suit tous les rigs ajoutés à cette intégration."
     }
   },
   "entity": {
@@ -87,6 +92,9 @@
       },
       "cpu_temperature": {
         "name": "Température CPU"
+      },
+      "fleet_hashrate": {
+        "name": "Hashrate total"
       }
     },
     "button": {
@@ -101,6 +109,12 @@
       },
       "wake": {
         "name": "Démarrer"
+      },
+      "pause_all": {
+        "name": "Tout mettre en pause"
+      },
+      "resume_all": {
+        "name": "Tout relancer"
       }
     },
     "select": {
